@@ -97,7 +97,7 @@ st.markdown("""
 * { box-sizing:border-box; }
 html, body, [class*="css"]{
   font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
-  font-size:15px; color:var(--ink); background:var(--bg);
+  font-size:17px; color:var(--ink); background:var(--bg);
   -webkit-font-smoothing:antialiased; line-height:1.55;
 }
 section[data-testid="stSidebar"]{ display:none; }
@@ -118,7 +118,7 @@ a:hover{ text-decoration:underline; }
 small{ color:var(--muted); }
 
 /* Section label */
-.sectlabel{ font-size:0.68rem; font-weight:700; text-transform:uppercase; letter-spacing:0.09em; color:var(--faint); margin:4px 0 8px 2px; }
+.sectlabel{ font-size:0.74rem; font-weight:700; text-transform:uppercase; letter-spacing:0.09em; color:var(--faint); margin:4px 0 8px 2px; }
 
 /* Cards */
 .card{ background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:18px 20px; }
@@ -148,16 +148,16 @@ small{ color:var(--muted); }
 
 /* st.metric → minimal */
 [data-testid="stMetric"]{ background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
-[data-testid="stMetricLabel"] p{ font-size:0.7rem !important; font-weight:600 !important; text-transform:uppercase;
+[data-testid="stMetricLabel"] p{ font-size:0.76rem !important; font-weight:600 !important; text-transform:uppercase;
   letter-spacing:0.06em; color:var(--muted) !important; }
-[data-testid="stMetricValue"]{ font-size:1.22rem !important; font-weight:700 !important; color:var(--ink) !important;
+[data-testid="stMetricValue"]{ font-size:1.3rem !important; font-weight:700 !important; color:var(--ink) !important;
   font-variant-numeric:tabular-nums; letter-spacing:-0.01em; white-space:nowrap; overflow:visible; }
 [data-testid="stMetricLabel"]{ overflow:visible; }
 [data-testid="stMetricDelta"]{ font-size:0.78rem !important; font-weight:600 !important; }
 
 /* Tabs — clean underline */
 .stTabs [data-baseweb="tab-list"]{ gap:6px; border-bottom:1px solid var(--line); }
-.stTabs [data-baseweb="tab"]{ font-size:0.86rem !important; font-weight:600; color:var(--muted);
+.stTabs [data-baseweb="tab"]{ font-size:0.95rem !important; font-weight:600; color:var(--muted);
   padding:8px 4px !important; margin-right:18px; background:transparent; border-bottom:2px solid transparent !important; }
 .stTabs [aria-selected="true"]{ color:var(--ink) !important; border-bottom:2px solid var(--accent) !important; }
 
@@ -176,11 +176,11 @@ input:focus-visible{ border-color:var(--accent) !important; box-shadow:0 0 0 3px
 
 /* Dataframe */
 [data-testid="stDataFrame"]{ border:1px solid var(--line); border-radius:12px; }
-.stCaption, [data-testid="stCaptionContainer"]{ color:var(--muted) !important; font-size:0.78rem !important; }
+.stCaption, [data-testid="stCaptionContainer"]{ color:var(--muted) !important; font-size:0.86rem !important; }
 
 /* Clean tables (where still used) */
 table.clean{ width:100%; border-collapse:collapse; font-size:0.85rem; }
-table.clean th{ text-align:left; font-size:0.66rem; font-weight:700; text-transform:uppercase; letter-spacing:0.06em;
+table.clean th{ text-align:left; font-size:0.72rem; font-weight:700; text-transform:uppercase; letter-spacing:0.06em;
   color:var(--faint); padding:6px 10px; border-bottom:1px solid var(--line); }
 table.clean td{ padding:8px 10px; border-bottom:1px solid #f1f5f9; color:var(--slate); vertical-align:top; }
 table.clean td b{ color:var(--ink); font-weight:600; }
