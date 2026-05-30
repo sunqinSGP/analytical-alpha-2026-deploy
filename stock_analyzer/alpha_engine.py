@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 import math
+import time
 
 # ---------------------------------------------------------------------------
 # Core utilities
@@ -53,9 +54,29 @@ def format_market_cap(mcap, symbol='$'):
     return f"{symbol}{mcap:,.0f}"
 
 
-def fetch_alpha_data(ticker):
-    tkr = yf.Ticker(ticker)
-    info = safe_get(lambda: tkr.info, {})
+def _yf_ticker(ticker):
+    """yfinance Ticker using a browser-impersonating curl_cffi session when available.
+    This is what stops Yahoo Finance from rate-limiting shared / cloud IPs (the exact
+    failure that made valid tickers like QLYS report 'could not fetch' on Streamlit Cloud)."""
+    try:
+        from curl_cffi import requests as _creq
+        return yf.Ticker(ticker, session=_creq.Session(impersonate="chrome"))
+    except Exception:
+        return yf.Ticker(ticker)
+
+
+def fetch_alpha_data(ticker, retries=3):
+    # Retry .info with a brief backoff (and a fresh impersonating session) — Yahoo often
+    # returns empty info on the first hit from a blocked IP but succeeds on a retry.
+    tkr = _yf_ticker(ticker)
+    info = {}
+    for attempt in range(retries):
+        info = safe_get(lambda: tkr.info, {}) or {}
+        if info.get('marketCap') is not None:
+            break
+        if attempt < retries - 1:
+            time.sleep(0.6 * (attempt + 1))
+            tkr = _yf_ticker(ticker)
 
     data = {
         'ticker': ticker.upper(),
@@ -2339,7 +2360,11 @@ def alpha_analysis(ticker, existing_positions=None, current_weight_pct=0, framew
     info = data['info']
 
     if not info or info.get('marketCap') is None:
-        return {'error': f"Could not fetch data for {ticker}. Check the ticker symbol."}
+        if not info:
+            return {'error': f"Couldn't reach Yahoo Finance for {ticker} — it may be temporarily "
+                             f"rate-limiting. Wait a few seconds and try again."}
+        return {'error': f"No market-cap data for {ticker}. Check the symbol (foreign listings need a "
+                         f"suffix, e.g. 3323.HK or D05.SI) — or Yahoo may be rate-limiting; try again."}
 
     # Step 1: Classify business model (or use override)
     if framework and framework in NoB_TYPES:
