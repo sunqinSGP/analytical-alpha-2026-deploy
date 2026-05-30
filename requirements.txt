@@ -4,5 +4,6 @@ pandas>=2.0,<3
 numpy>=1.26,<3
 yfinance>=0.2.55,<0.3
 requests>=2.31
+openai>=1.30          # DeepSeek chat uses the OpenAI-compatible SDK
 # Dropped (installed but unused): flask, scikit-learn, matplotlib, plotly.
 # Charts use Streamlit's built-in st.line_chart (no plotly dependency).

@@ -19,6 +19,7 @@ from stock_analyzer.alpha_engine import (
 )
 from stock_analyzer.verdict import CONV_COLORS, build_factor_attribution, recommendation_for
 from stock_analyzer import portfolio as pf
+from stock_analyzer import ai, news
 
 st.set_page_config(page_title="Analytical Alpha 2026", page_icon="◆",
                    layout="wide", initial_sidebar_state="collapsed")
@@ -51,6 +52,33 @@ def cached_fx(from_ccy, to_ccy):
     except Exception:
         pass
     return None
+
+
+# ===========================================================================
+# LLM helpers — DeepSeek key from Streamlit secrets; graceful when absent
+# ===========================================================================
+def _llm_key():
+    try:
+        return st.secrets.get("deepseek_api_key") or st.secrets.get("llm_api_key")
+    except Exception:
+        return None
+
+
+def _llm_model():
+    try:
+        return st.secrets.get("llm_model") or ai.DEFAULT_MODEL
+    except Exception:
+        return ai.DEFAULT_MODEL
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_news():
+    return news.fetch_market_news()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_macro(api_key, model, titles):
+    return ai.summarize_macro(api_key, [{'title': t} for t in titles], model=model)
 
 
 # ===========================================================================
@@ -535,7 +563,7 @@ if not ticker:
     st.markdown("<br>", unsafe_allow_html=True)
     st.caption("Enter a ticker above for a single-stock deep dive — or work with your whole book below.")
 
-    tab_pf, tab_scr = st.tabs(["Portfolio", "Screener"])
+    tab_pf, tab_scr, tab_macro = st.tabs(["Portfolio", "Screener", "Macro"])
 
     with tab_pf:
         st.markdown("#### Your portfolio")
@@ -584,6 +612,32 @@ if not ticker:
     with tab_scr:
         st.markdown("#### High-conviction screener")
         render_screener()
+
+    with tab_macro:
+        st.markdown("#### Macro & sector news")
+        st.caption("Screens recent market and sector headlines, then summarises the likely near-term "
+                   "share-price impact by sector. Cached hourly · AI-generated, not financial advice.")
+        _key = _llm_key()
+        if not _key:
+            st.info("**Enable the summary:** add a `deepseek_api_key` to your Streamlit secrets "
+                    "(get one at platform.deepseek.com). The headlines themselves work without a key.")
+        if st.button("Run macro read", type="primary"):
+            st.session_state['macro_go'] = True
+        if st.session_state.get('macro_go'):
+            with st.spinner("Fetching headlines…"):
+                _items = cached_news()
+            if not _items:
+                st.warning("No headlines available right now — try again shortly.")
+            else:
+                if _key:
+                    try:
+                        with st.spinner("Summarising sector impact…"):
+                            st.markdown(cached_macro(_key, _llm_model(), tuple(n['title'] for n in _items)))
+                    except Exception as e:
+                        st.error(f"Couldn't reach the model: {e}")
+                with st.expander(f"Headlines screened ({len(_items)})"):
+                    for n in _items:
+                        st.markdown(f"- {n['title']}" + (f"  ·  *{n['publisher']}*" if n['publisher'] else ""))
 
     st.caption("Not financial advice · Public data via Yahoo Finance.")
     st.stop()
@@ -643,7 +697,7 @@ m[5].metric("Risk", risk_factors.get('risk_level', 'N/A'))
 # TABS
 # ===========================================================================
 st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
-tab_v, tab_f, tab_mr, tab_mk = st.tabs(["Verdict", "Fundamentals", "Moat & Risk", "Markets"])
+tab_v, tab_f, tab_mr, tab_mk, tab_ask = st.tabs(["Verdict", "Fundamentals", "Moat & Risk", "Markets", "Ask AI"])
 
 # ----------------------------------------------------------------- VERDICT
 with tab_v:
@@ -886,6 +940,42 @@ with tab_mk:
         st.markdown('<div class="card"><div class="sectlabel" style="margin:0 0 6px 0;">2026 style rotation</div>'
                     '<div style="font-size:0.82rem; color:var(--slate);">Value outpacing growth early; valuation discipline returning; '
                     'a barbell of AI-infra growth + quality value/energy.</div></div>', unsafe_allow_html=True)
+
+# ------------------------------------------------------------------ ASK AI
+with tab_ask:
+    st.caption("Ask about this analysis — answers are grounded in the app's own numbers. "
+               "AI-generated, informational, not financial advice.")
+    _key = _llm_key()
+    if not _key:
+        st.info("**Enable the assistant:** add a `deepseek_api_key` to your Streamlit secrets "
+                "(app → Settings → Secrets). Get a key at platform.deepseek.com — it's inexpensive.")
+    else:
+        _chatkey = f"chat::{ticker}"
+        _hist = st.session_state.setdefault(_chatkey, [])
+        for _m in _hist:
+            with st.chat_message(_m['role']):
+                st.markdown(_m['content'])
+        if not _hist:
+            st.markdown('<div style="color:var(--muted); font-size:0.85rem;">Try: '
+                        '“Why only moderate conviction?” · “What would make this a buy?” · '
+                        '“Explain the moat score.” · “Biggest risks to the thesis?”</div>',
+                        unsafe_allow_html=True)
+        _prompt = st.chat_input(f"Ask about {ticker}…")
+        if _prompt:
+            _hist.append({'role': 'user', 'content': _prompt})
+            with st.chat_message('user'):
+                st.markdown(_prompt)
+            with st.chat_message('assistant'):
+                with st.spinner("Thinking…"):
+                    try:
+                        _ans = ai.complete(_key, _hist, system=ai.stock_chat_system(result), model=_llm_model())
+                    except Exception as e:
+                        _ans = f"⚠️ Couldn't reach the model: {e}"
+                st.markdown(_ans)
+            _hist.append({'role': 'assistant', 'content': _ans})
+        if _hist and st.button("Clear chat"):
+            st.session_state[_chatkey] = []
+            st.rerun()
 
 st.markdown("<hr>", unsafe_allow_html=True)
 st.caption(f"Not financial advice · Public data via Yahoo Finance · {datetime.now().strftime('%b %d, %Y %H:%M')} · "

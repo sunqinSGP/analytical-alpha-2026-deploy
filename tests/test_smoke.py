@@ -16,6 +16,8 @@ from stock_analyzer.alpha_engine import (
 )
 from stock_analyzer.verdict import build_factor_attribution, recommendation_for
 from stock_analyzer import portfolio as pf
+from stock_analyzer import ai
+from stock_analyzer import news as newsmod
 
 PASS, FAIL = 0, 0
 
@@ -195,6 +197,30 @@ oc = pf.over_cap(enr)
 check("over-cap flags the concentrated name", any(o['ticker'] == 'A' for o in oc))
 reg = pf.group_weights(enr, 'region')
 check("region exposure groups correctly", abs(reg.get('US', 0) - enr[0]['weight_pct']) < 1e-6)
+
+print("\n[10] AI & news modules (prompt builders + schema parsing; no live API)")
+_res = alpha_analysis('TEST', data=make_data())
+_ctx = ai.stock_context(_res)
+check("stock_context mentions the ticker", 'TEST' in _ctx)
+check("stock_context includes the verdict line", 'CONVICTION' in _ctx.upper())
+check("chat system prompt carries the not-advice guardrail",
+      'not financial advice' in ai.stock_chat_system(_res).lower())
+_mm = ai.macro_messages([{'title': 'Fed holds rates steady', 'publisher': 'Reuters'}])
+check("macro_messages embeds the headline", 'Fed holds rates steady' in _mm[0]['content'])
+
+
+def _empty_key_raises():
+    try:
+        ai.complete('', [{'role': 'user', 'content': 'hi'}])
+        return False
+    except Exception:
+        return True
+
+
+check("complete() rejects an empty API key", _empty_key_raises())
+check("news parses the legacy schema", newsmod._normalize({'title': 'A', 'publisher': 'P'})['title'] == 'A')
+check("news parses the nested-content schema",
+      newsmod._normalize({'content': {'title': 'B', 'provider': {'displayName': 'Q'}}})['title'] == 'B')
 
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 sys.exit(1 if FAIL else 0)
