@@ -133,6 +133,10 @@ small{ color:var(--muted); }
   padding:8px 4px !important; margin-right:18px; background:transparent; border-bottom:2px solid transparent !important; }
 .stTabs [aria-selected="true"]{ color:var(--ink) !important; border-bottom:2px solid var(--accent) !important; }
 
+/* Widget labels — small, muted, consistent */
+[data-testid="stWidgetLabel"] p{ font-size:0.72rem !important; font-weight:600 !important;
+  color:var(--muted) !important; margin-bottom:3px !important; }
+
 /* Inputs & buttons */
 input, select, textarea, .stTextInput>div>div>input{
   border-radius:9px !important; border:1px solid #cbd5e1 !important; font-size:0.9rem !important; }
@@ -487,14 +491,21 @@ st.markdown("""
 
 c1, c2, c3 = st.columns([0.5, 0.28, 0.22])
 with c1:
-    ticker = st.text_input("Ticker", placeholder="Search a ticker —  AAPL · NVDA · 3323.HK · D05.SI",
-                           label_visibility="collapsed").upper().strip()
+    ticker = st.text_input(
+        "Ticker", placeholder="AAPL · NVDA · 3323.HK · D05.SI",
+        help="Enter a stock symbol to analyse. Foreign listings use Yahoo suffixes (.HK Hong Kong, .SI Singapore, .L London…).",
+    ).upper().strip()
 with c2:
     framework_options = ['Auto-detect framework'] + [v['name'] for v in NoB_TYPES.values()]
-    framework_choice = st.selectbox("Framework", framework_options, index=0, label_visibility="collapsed")
+    framework_choice = st.selectbox(
+        "Valuation framework", framework_options, index=0,
+        help="Which of the six valuation lenses to apply. Leave on Auto-detect unless you want to override how the stock is classified.",
+    )
 with c3:
-    weight_pct = st.number_input("Position %", 0.0, 100.0, 0.0, 0.5,
-                                 label_visibility="collapsed", placeholder="Position % (optional)")
+    weight_pct = st.number_input(
+        "Your position % (optional)", 0.0, 100.0, 0.0, 0.5,
+        help="Your current holding in this stock as a % of your portfolio. Tailors the sizing advice — e.g. flags TRIM when you're over the risk-based cap. Leave at 0 to just see the suggested max.",
+    )
 
 
 # ===========================================================================
