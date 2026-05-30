@@ -1167,9 +1167,15 @@ def zacks_style_momentum(data):
 # QUALITATIVE QUADRANT — Circumvention Delta Moat Architecture
 # ===========================================================================
 
-def moat_analysis(info, gm=None):
+def moat_analysis(info, gm=None, data=None):
     """Evaluate competitive moat using the Circumvention Delta formula:
-    Circumvention Delta = Time + Capital + Performance Loss"""
+    Circumvention Delta = Time + Capital + Performance Loss.
+
+    The keyword-derived widths capture STRUCTURAL barriers; the final moat rating then
+    blends in QUANTITATIVE evidence of durable advantage (returns on capital, margins,
+    margin stability, scale, R&D intensity) so quality compounders aren't tagged
+    'No Moat' just because their business summary is terse. Quant can only raise the
+    rating — the structural score sets a floor — so no clearly-moated name regresses."""
 
     desc = (info.get('longBusinessSummary') or '').lower()
     industry = (info.get('industry') or '').lower()
@@ -1297,9 +1303,58 @@ def moat_analysis(info, gm=None):
     max_delta = 13
     delta_pct = (circumvention_delta / max_delta) * 100
 
-    # ---- Composite Moat Rating (1-10) ----
-    moat_score = (temporal_score + efficiency_score + trust_score) / 3
-    moat_score = max(1.0, min(10.0, moat_score * 1.5 + 1))
+    # ---- Keyword (structural-barrier) moat ----
+    keyword_moat = max(1.0, min(10.0, (temporal_score + efficiency_score + trust_score) / 3 * 1.5 + 1))
+
+    # ---- Quantitative moat evidence (returns on capital, margins, scale, stability) ----
+    q, q_have = 0.0, False
+    roe = info.get('returnOnEquity')
+    if roe is not None:
+        q_have = True
+        q += 2.5 if roe > 0.30 else 1.5 if roe > 0.20 else 0.7 if roe > 0.12 else (-1.0 if roe < 0 else 0.0)
+    gm_q = info.get('grossMargins')
+    if gm_q is not None:
+        q_have = True
+        q += 2.0 if gm_q > 0.60 else 1.0 if gm_q > 0.40 else 0.4 if gm_q > 0.25 else 0.0
+    opm = info.get('operatingMargins')
+    if opm is not None:
+        q_have = True
+        q += 2.0 if opm > 0.25 else 1.0 if opm > 0.15 else 0.4 if opm > 0.05 else (-0.5 if opm < 0 else 0.0)
+    fcf_m, rev_m = info.get('freeCashflow'), info.get('totalRevenue')
+    if fcf_m and rev_m and rev_m > 0:
+        q_have = True
+        fcfm = fcf_m / rev_m
+        q += 1.5 if fcfm > 0.20 else 0.7 if fcfm > 0.10 else 0.0
+    mcap_q = info.get('marketCap')
+    if mcap_q:
+        q += 1.0 if mcap_q > 500e9 else 0.5 if mcap_q > 100e9 else 0.0
+    # R&D intensity (temporal moat) + gross-margin stability, from annual statements
+    inc_m = data.get('income_annual') if data else None
+    if inc_m is not None and not inc_m.empty and len(inc_m.columns) >= 1 and 'Total Revenue' in inc_m.index:
+        try:
+            rev0 = inc_m.loc['Total Revenue', inc_m.columns[0]]
+            if 'Research And Development' in inc_m.index and pd.notna(rev0) and rev0 > 0:
+                rnd_int = inc_m.loc['Research And Development', inc_m.columns[0]] / rev0
+                if pd.notna(rnd_int):
+                    q_have = True
+                    q += 1.0 if rnd_int > 0.15 else 0.5 if rnd_int > 0.07 else 0.0
+            if len(inc_m.columns) >= 2 and 'Gross Profit' in inc_m.index:
+                rev1 = inc_m.loc['Total Revenue', inc_m.columns[1]]
+                if pd.notna(rev0) and rev0 > 0 and pd.notna(rev1) and rev1 > 0:
+                    g0 = inc_m.loc['Gross Profit', inc_m.columns[0]] / rev0
+                    g1 = inc_m.loc['Gross Profit', inc_m.columns[1]] / rev1
+                    if pd.notna(g0) and pd.notna(g1) and g0 > 0.40 and g0 >= g1 - 0.01:
+                        q += 1.0  # high, stable/expanding gross margin
+        except Exception:
+            pass
+    quant_moat = max(0.0, min(10.0, q)) if q_have else None
+
+    # ---- Composite Moat Rating: quant can RAISE it; structure sets the floor ----
+    if quant_moat is not None:
+        moat_score = max(0.45 * keyword_moat + 0.55 * quant_moat, 0.8 * keyword_moat)
+    else:
+        moat_score = keyword_moat
+    moat_score = max(1.0, min(10.0, moat_score))
 
     if moat_score >= 8:
         moat_label = "Wide Moat — Exceptional Resilience"
@@ -1322,6 +1377,12 @@ def moat_analysis(info, gm=None):
         'circumvention_delta_pct': round(delta_pct, 1),
         'circumvention_delta_formula': f"Time({temporal_score}) + Capital({efficiency_score}) + Performance Loss({trust_score}) = {circumvention_delta}",
         'moat_rating': round(moat_score, 1),
+        'keyword_moat': round(keyword_moat, 1),
+        'quant_moat': round(quant_moat, 1) if quant_moat is not None else None,
+        'moat_composition': (
+            f"Blend of structural barriers ({keyword_moat:.1f}) and economics — "
+            f"returns/margins/scale ({quant_moat:.1f})" if quant_moat is not None
+            else "Structural barriers only (no economic data)"),
         'moat_label': moat_label,
         'moat_color': moat_color,
         'benchmark': '≥7 = Wide Moat, 4-6 = Narrow Moat, <4 = No Moat',
@@ -1443,7 +1504,7 @@ def qualitative_quadrant(data):
     """Full qualitative analysis — moat architecture + performance signals."""
     info = data['info']
     gm = info.get('grossMargins')
-    moat = moat_analysis(info, gm)
+    moat = moat_analysis(info, gm, data)
     perf = moat_performance_signals(info, data)
 
     desc = (info.get('longBusinessSummary') or '').lower()

@@ -153,5 +153,23 @@ check("recommendation HIGH -> ACCUMULATE", recommendation_for('HIGH CONVICTION',
 check("over-cap position -> TRIM", recommendation_for('HIGH CONVICTION', 10, 15)[0] == 'TRIM')
 check("PASS -> AVOID", recommendation_for('PASS', 3, 0)[0] == 'AVOID')
 
+print("\n[8] Moat rating blends in economics (no 'No Moat' for quality compounders)")
+# Terse summary (no moat keywords) but elite economics, AAPL-like
+terse = make_data(info={'longBusinessSummary': 'A company that designs and sells products.',
+                        'returnOnEquity': 1.5, 'grossMargins': 0.46, 'operatingMargins': 0.30,
+                        'marketCap': 3_000_000_000_000, 'totalRevenue': 400_000_000_000})
+mres = alpha_analysis('AAPL_LIKE', data=terse)
+mmoat = mres['qualitative']['moat']
+print(f"      keyword_moat={mmoat['keyword_moat']} quant_moat={mmoat['quant_moat']} -> rating={mmoat['moat_rating']}")
+check("quant_moat populated for profitable name", mmoat['quant_moat'] is not None and mmoat['quant_moat'] >= 5)
+check("terse+profitable name is NOT 'No Moat' (rating >= 4)", mmoat['moat_rating'] >= 4)
+check("quant raises rating above keyword-only", mmoat['moat_rating'] >= mmoat['keyword_moat'])
+# Weak commodity stays low
+weak = make_data(info={'longBusinessSummary': 'Sells generic goods.', 'returnOnEquity': 0.04,
+                       'grossMargins': 0.12, 'operatingMargins': 0.03, 'marketCap': 2_000_000_000,
+                       'sector': 'Consumer Defensive', 'industry': 'Grocery Stores'})
+wmoat = alpha_analysis('WEAK', data=weak)['qualitative']['moat']
+check("weak commodity stays low moat (rating < 5)", wmoat['moat_rating'] < 5)
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 sys.exit(1 if FAIL else 0)
