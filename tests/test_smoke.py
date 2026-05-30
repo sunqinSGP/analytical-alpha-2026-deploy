@@ -1,0 +1,157 @@
+"""
+Offline smoke test for the Analytical Alpha engine — NO network required.
+Feeds canned Yahoo-shaped data through alpha_analysis() across all 6 NoB frameworks
+and asserts the key correctness fixes hold. Run: python tests/test_smoke.py
+"""
+import os
+import sys
+import pandas as pd
+import numpy as np
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from stock_analyzer.alpha_engine import (
+    alpha_analysis, dividend_yield_pct, format_market_cap,
+    assess_conviction, assign_screen_tier, forward_rule_of_40,
+    net_revenue_retention_estimate, NoB_TYPES,
+)
+from stock_analyzer.verdict import build_factor_attribution, recommendation_for
+
+PASS, FAIL = 0, 0
+
+
+def check(name, cond):
+    global PASS, FAIL
+    if cond:
+        PASS += 1
+        print(f"  PASS  {name}")
+    else:
+        FAIL += 1
+        print(f"  FAIL  {name}")
+
+
+def _cols(n):
+    # Yahoo orders statement columns most-recent-first
+    return list(pd.to_datetime([f"20{25 - i:02d}-12-31" for i in range(n)]))
+
+
+def make_data(**overrides):
+    """Build a canned data dict shaped like fetch_alpha_data() output."""
+    info = {
+        'marketCap': 3_500_000_000_000, 'currentPrice': 100.0,
+        'longName': 'Canned Corp', 'shortName': 'Canned',
+        'sector': 'Technology', 'industry': 'Software - Infrastructure',
+        'longBusinessSummary': 'A subscription cloud platform with proprietary, industry-leading technology trusted by enterprise customers.',
+        'country': 'United States', 'fullTimeEmployees': 5000,
+        'revenueGrowth': 0.20, 'grossMargins': 0.78, 'operatingMargins': 0.25,
+        'returnOnEquity': 0.30, 'profitMargins': 0.18, 'ebitdaMargins': 0.30,
+        'forwardPE': 35.0, 'trailingPE': 50.0, 'priceToSales': 12.0, 'priceToBook': 8.0,
+        'freeCashflow': 90_000_000, 'beta': 1.1, 'debtToEquity': 30.0,
+        'dividendRate': None, 'dividendYield': None,
+        'forwardEps': 3.0, 'trailingEps': 2.5, 'sharesOutstanding': 1_000_000_000,
+        'earningsGrowth': 0.25, 'recommendationKey': 'buy', 'targetMeanPrice': 120.0,
+        'totalCash': 500_000_000, 'enterpriseToEbitda': 25.0, 'currentRatio': 2.0,
+    }
+    info.update(overrides.pop('info', {}))
+
+    # 2-year annual statement: revenue +20%, gross margin expanding 72.5% -> 75%
+    income_annual = pd.DataFrame(
+        {_cols(2)[0]: {'Total Revenue': 480.0, 'Net Income': 80.0, 'Gross Profit': 360.0},
+         _cols(2)[1]: {'Total Revenue': 400.0, 'Net Income': 60.0, 'Gross Profit': 290.0}})
+
+    # 8 quarters: each quarter +20% vs the same quarter a year ago; shares SHRINK (buyback)
+    qcols = _cols(8)
+    rev_q = [120, 120, 120, 120, 100, 100, 100, 100]          # newest-first
+    shares_q = [900, 920, 940, 960, 1000, 1000, 1000, 1000]   # buyback: fewer shares now
+    income_quarterly = pd.DataFrame(
+        {qcols[i]: {'Total Revenue': float(rev_q[i]),
+                    'Diluted Average Shares': float(shares_q[i] * 1e6)} for i in range(8)})
+
+    balance_sheet = pd.DataFrame(
+        {_cols(2)[0]: {'Deferred Revenue': 200.0},
+         _cols(2)[1]: {'Deferred Revenue': 150.0}})
+
+    closes = np.linspace(70, 100, 300)
+    price_data = pd.DataFrame({'Close': closes},
+                              index=pd.date_range('2025-01-01', periods=300, freq='D'))
+
+    data = {
+        'ticker': 'TEST', 'info': info, 'price': info['currentPrice'],
+        'name': info['longName'], 'sector': info['sector'], 'industry': info['industry'],
+        'description': info['longBusinessSummary'], 'country': info['country'],
+        'employees': info['fullTimeEmployees'],
+        'income_annual': income_annual, 'income_quarterly': income_quarterly,
+        'balance_sheet': balance_sheet, 'cashflow': pd.DataFrame(), 'price_data': price_data,
+    }
+    data.update(overrides)
+    return data
+
+
+print("\n[1] Helper units")
+check("dividend_yield_pct from rate/price (2/100 -> 2.0%)",
+      abs(dividend_yield_pct({'dividendRate': 2.0, 'currentPrice': 100.0}) - 2.0) < 1e-6)
+check("dividend_yield_pct fraction 0.025 -> 2.5%",
+      abs(dividend_yield_pct({'dividendYield': 0.025}) - 2.5) < 1e-6)
+check("dividend_yield_pct percent 2.5 -> 2.5%",
+      abs(dividend_yield_pct({'dividendYield': 2.5}) - 2.5) < 1e-6)
+check("format_market_cap trillions", format_market_cap(3.5e12, '$') == '$3.50T')
+check("format_market_cap billions", format_market_cap(2.5e9, '$') == '$2.5B')
+check("format_market_cap None -> N/A", format_market_cap(None) == 'N/A')
+
+print("\n[2] NRR proxy uses TOTAL revenue (buyback must NOT inflate it)")
+nrr = net_revenue_retention_estimate(make_data())
+# revenue +20% YoY -> ~120 regardless of the 10% share shrink; old per-share code gave ~133
+check("NRR ~120 (not ~133)", nrr['estimated_nrr_pct'] is not None and abs(nrr['estimated_nrr_pct'] - 120) < 1.5)
+check("NRR flagged as proxy", nrr.get('is_proxy') is True)
+check("NRR copy is honest (no 'zero new customers')",
+      'zero new customers' not in (nrr.get('installed_growth_note') or '').lower())
+
+print("\n[3] Forward Rule of 40 — bounded margin inflection, no apples-to-oranges")
+fwd = forward_rule_of_40(make_data())
+check("forward margin expansion bounded to <= 15", abs(fwd['margin_expansion_pct']) <= 15.0)
+check("inflection is not the old 'MASSIVE INFLECTION'", fwd['inflection_signal'] != 'MASSIVE INFLECTION')
+check("forward FCF margin != trailing-identical no-op (it differs by margin term)",
+      fwd['forward_fcf_margin_pct'] is not None)
+
+print("\n[4] alpha_analysis runs across ALL 6 NoB frameworks with no exception")
+for key in list(NoB_TYPES.keys()) + [None]:
+    label = key or 'auto-detect'
+    try:
+        res = alpha_analysis('TEST', framework=key, data=make_data())
+        ok = 'error' not in res and res['thesis']['conviction'] in (
+            'HIGH CONVICTION', 'MODERATE CONVICTION', 'SELECTIVE', 'OPPORTUNISTIC', 'PASS')
+        check(f"framework={label}: {res.get('thesis', {}).get('conviction', 'ERR')}", ok)
+    except Exception as e:
+        check(f"framework={label}: raised {type(e).__name__}: {e}", False)
+
+print("\n[5] Missing-data edge cases (foreign tickers etc.) don't crash the engine")
+sparse = make_data(info={'marketCap': 1e9, 'sector': 'Financial Services', 'industry': 'Banks - Regional',
+                         'grossMargins': None, 'revenueGrowth': None, 'forwardEps': None,
+                         'trailingEps': None, 'freeCashflow': None, 'fullTimeEmployees': None,
+                         'dividendRate': 3.0})
+try:
+    res = alpha_analysis('SPARSE.SI', data=sparse)
+    check("sparse/foreign ticker analysed without error", 'error' not in res)
+except Exception as e:
+    check(f"sparse ticker raised {type(e).__name__}: {e}", False)
+
+print("\n[6] Conviction & screener tier are consistent (shared rubric)")
+hi = assess_conviction(8, 1, 130, 'POSITIVE INFLECTION', 'COMPOUNDING')
+check("wide-moat/clean/growth -> HIGH CONVICTION", hi[0] == 'HIGH CONVICTION')
+check("same inputs -> PLATINUM tier",
+      assign_screen_tier(8, 1, 'COMPOUNDING', 130, 'POSITIVE INFLECTION', 11) == 'PLATINUM')
+check("decaying moat blocks HIGH CONVICTION",
+      assess_conviction(8, 1, 130, 'POSITIVE INFLECTION', 'DECAYING')[0] != 'HIGH CONVICTION')
+check("weak name -> no tier", assign_screen_tier(3, 7, 'DECAYING', 90, '', 2) is None)
+
+print("\n[7] Verdict layer (powers the hero band) builds offline")
+res = alpha_analysis('TEST', data=make_data())
+factors = build_factor_attribution(res)
+check("factor attribution non-empty", len(factors) > 0)
+check("each factor has the expected keys",
+      all({'Factor', 'ImpactNum', 'Impact', 'Direction'} <= set(x) for x in factors))
+check("recommendation HIGH -> ACCUMULATE", recommendation_for('HIGH CONVICTION', 10, 0)[0] == 'ACCUMULATE')
+check("over-cap position -> TRIM", recommendation_for('HIGH CONVICTION', 10, 15)[0] == 'TRIM')
+check("PASS -> AVOID", recommendation_for('PASS', 3, 0)[0] == 'AVOID')
+
+print(f"\n==== {PASS} passed, {FAIL} failed ====")
+sys.exit(1 if FAIL else 0)

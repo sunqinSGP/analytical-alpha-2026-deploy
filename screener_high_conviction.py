@@ -1,14 +1,16 @@
 """
 High Conviction Stock Screener — 2026 Framework
-Scans a curated watchlist for stocks meeting HIGH CONVICTION criteria:
-  - Moat Rating >= 7
-  - Risk Score <= 2
-  - NRR (installed growth) >= 120% OR strong Forward R40 inflection
-Also surfaces MODERATE CONVICTION candidates as a secondary tier.
+Scans a curated watchlist and assigns each stock a single best tier using the SAME
+rubric as the Streamlit app (stock_analyzer.assign_screen_tier):
+  - PLATINUM: Moat >= 6, Risk <= 1, moat COMPOUNDING, growth signal
+  - GOLD:     Moat >= 5, Risk <= 2, growth signal
+  - SILVER:   Moat >= 4, Risk <= 4, Circumvention Delta >= 4
+where a "growth signal" = revenue-retention proxy >= 120% OR a bullish Forward-R40
+inflection. (Retention is a total-revenue proxy, not true cohort NRR.)
 """
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from stock_analyzer.alpha_engine import alpha_analysis
+from stock_analyzer.alpha_engine import alpha_analysis, assign_screen_tier
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -44,6 +46,7 @@ WATCHLIST = [
     # European / Global
     'SAP', 'ASML', 'NVO', 'AZN', 'HSBC', 'BHP', 'RIO', 'BP', 'SHEL',
 ]
+WATCHLIST = list(dict.fromkeys(WATCHLIST))  # de-duplicate (AMZN, NVO appeared twice)
 
 # ===========================================================================
 # SCREENING LOGIC
@@ -127,30 +130,14 @@ def main():
 
     df = pd.DataFrame(results)
 
-    # ---- PLATINUM (Highest Quality) ----
-    # Rare: wide moat + clean risk + growth signal + compounding moat
-    platinum = df[
-        (df['moat_rating'] >= 6) &
-        (df['risk_score'] <= 1) &
-        (df['moat_performance'] == 'COMPOUNDING') &
-        ((df['nrr_installed_growth'] == True) | (df['fwd_inflection'].isin(['MASSIVE INFLECTION', 'POSITIVE INFLECTION', 'BENCHMARK CROSSOVER'])))
-    ].sort_values('moat_rating', ascending=False)
-
-    # ---- GOLD (High Conviction) ----
-    # Strong: moderate moat + clean risk + growth catalyst
-    high_conviction = df[
-        (df['moat_rating'] >= 5) &
-        (df['risk_score'] <= 2) &
-        ((df['nrr_installed_growth'] == True) | (df['fwd_inflection'].isin(['MASSIVE INFLECTION', 'POSITIVE INFLECTION', 'BENCHMARK CROSSOVER'])))
-    ].sort_values('moat_rating', ascending=False)
-
-    # ---- SILVER (Moderate Conviction) ----
-    # Decent: some moat + manageable risk
-    moderate_conviction = df[
-        (df['moat_rating'] >= 4) &
-        (df['risk_score'] <= 4) &
-        (df['circumvention_delta'] >= 4)
-    ].sort_values('moat_rating', ascending=False)
+    # Single source of truth — same rubric as the Streamlit app (assign_screen_tier).
+    # Each stock lands in exactly one (best) tier.
+    df['tier'] = df.apply(lambda r: assign_screen_tier(
+        r['moat_rating'], r['risk_score'], r['moat_performance'],
+        r['nrr_pct'], r['fwd_inflection'], r['circumvention_delta']), axis=1)
+    platinum = df[df['tier'] == 'PLATINUM'].sort_values('moat_rating', ascending=False)
+    high_conviction = df[df['tier'] == 'GOLD'].sort_values('moat_rating', ascending=False)
+    moderate_conviction = df[df['tier'] == 'SILVER'].sort_values('moat_rating', ascending=False)
 
     # ---- DISPLAY ----
     display_cols = ['ticker', 'name', 'nob', 'moat_rating', 'circumvention_delta',

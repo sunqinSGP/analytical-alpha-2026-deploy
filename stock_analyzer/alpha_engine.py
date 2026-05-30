@@ -23,6 +23,36 @@ def safe_get(func, default=None):
         return default
 
 
+def dividend_yield_pct(info):
+    """Return dividend yield as a PERCENT (e.g. 2.5 for 2.5%), robust to yfinance's
+    inconsistent units across versions. Prefers dividendRate/price (unambiguous);
+    falls back to a heuristic on dividendYield (a value <1 is treated as a fraction,
+    >=1 as an already-percent figure)."""
+    if not info:
+        return None
+    rate = info.get('dividendRate') or info.get('trailingAnnualDividendRate')
+    price = info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose')
+    if rate and price and price > 0:
+        return (rate / price) * 100
+    dy = info.get('dividendYield')
+    if dy is None:
+        return None
+    return dy * 100 if dy < 1 else dy
+
+
+def format_market_cap(mcap, symbol='$'):
+    """Format a market cap (already in the listing's own currency) with T/B/M scaling."""
+    if not mcap:
+        return 'N/A'
+    if mcap >= 1e12:
+        return f"{symbol}{mcap / 1e12:.2f}T"
+    if mcap >= 1e9:
+        return f"{symbol}{mcap / 1e9:.1f}B"
+    if mcap >= 1e6:
+        return f"{symbol}{mcap / 1e6:.0f}M"
+    return f"{symbol}{mcap:,.0f}"
+
+
 def fetch_alpha_data(ticker):
     tkr = yf.Ticker(ticker)
     info = safe_get(lambda: tkr.info, {})
@@ -57,42 +87,42 @@ NoB_TYPES = {
     'high_growth_saas': {
         'name': 'High-Growth SaaS',
         'description': 'Subscription software — Rule of 40, LTV:CAC, CAC payback, NRR retention velocity',
-        'icon': '',
+        'icon': '💻',
         'color': '#3b82f6',
         'metrics_focus': 'Efficiency & compounding — can it scale profitably?',
     },
     'ai_infra_semiconductor': {
         'name': 'AI Infra / Semiconductor',
         'description': 'Chip makers, data center hardware — backlog conversion, revision-led EPS, compute demand',
-        'icon': '',
+        'icon': '🔬',
         'color': '#8b5cf6',
         'metrics_focus': 'Throughput & capacity — is compute demand outstripping supply?',
     },
     'energy_industrial': {
         'name': 'Energy & Industrial',
         'description': 'Power, utilities, manufacturing — power pipeline (GW), backlog conversion, CapEx efficiency',
-        'icon': '',
+        'icon': '⚡',
         'color': '#f59e0b',
         'metrics_focus': 'Physical capacity & CapEx returns — are assets delivering?',
     },
     'biopharma': {
         'name': 'Biopharma',
         'description': 'Drug development — rNPV, clinical stage, AI-enabled reduced attrition, milestone catalysts',
-        'icon': '',
+        'icon': '🧬',
         'color': '#10b981',
         'metrics_focus': 'Milestone alpha — scientific catalysts & probability-weighted value',
     },
     'traditional_value': {
         'name': 'Traditional / Value',
         'description': 'Cyclicals, industrials, materials, financials — P/E, P/B, dividend yield, earnings stability',
-        'icon': '',
+        'icon': '🏛️',
         'color': '#64748b',
         'metrics_focus': 'Margin of safety — is the price below intrinsic value?',
     },
     'high_growth_general': {
         'name': 'High-Growth (General)',
         'description': 'Revenue growth >15%, may be unprofitable — growth sustainability, TAM, cash runway',
-        'icon': '',
+        'icon': '🚀',
         'color': '#2563eb',
         'metrics_focus': 'Growth durability — can it sustain the trajectory?',
     },
@@ -138,7 +168,7 @@ def classify_business_model(ticker, info):
     ps = info.get('priceToSales')
     fcf = info.get('freeCashflow')
     beta = info.get('beta')
-    div_yield = info.get('dividendYield')
+    div_yield = dividend_yield_pct(info)  # normalized to a percent (e.g. 2.5 = 2.5%)
 
     is_high_growth = (rev_growth is not None and rev_growth > 0.15)
     is_high_margin = (gm is not None and gm > 0.60)
@@ -219,7 +249,7 @@ def classify_business_model(ticker, info):
         if is_unprofitable: growth_signals += 1  # unprofitable growth = typical young tech
         if is_low_margin: value_signals += 1
         if is_low_ps: value_signals += 1
-        if div_yield and div_yield > 0.02: value_signals += 1
+        if div_yield and div_yield > 2: value_signals += 1  # >2% yield
         if tpe and 0 < tpe < 15: value_signals += 1
 
         # Check description for SaaS/cloud signals
@@ -479,15 +509,17 @@ def industrial_throughput_filter(data):
         elif upside > 5:
             revision_score += 1
 
+    # Descriptive labels — NOT a Zacks rank (the single Zacks-style rank lives in
+    # zacks_style_momentum on a different scale; two "#1/#2" ranks were confusing).
     revision_rank = None
     if revision_score >= 6:
-        revision_rank = "#1 Strong Buy — price appreciation driven by upward analyst revisions"
+        revision_rank = "Strong upward revisions"
     elif revision_score >= 3:
-        revision_rank = "#2 Buy — revision-led momentum"
+        revision_rank = "Positive revisions"
     elif revision_score >= 0:
-        revision_rank = "#3 Hold"
+        revision_rank = "Neutral revisions"
     else:
-        revision_rank = "#4/5 — negative revision trend"
+        revision_rank = "Negative revisions"
 
     is_revision_led = revision_score >= 4 and eps_forward is not None and eps_trailing is not None and eps_forward > eps_trailing
 
@@ -804,24 +836,35 @@ def rpo_analysis(data):
                         rpo_growth_pct = ((total_rpo / rpo_prior) - 1) * 100
                 break
 
-    rev_growth = info.get('revenueGrowth')
-    rev_growth_pct = (rev_growth * 100) if rev_growth is not None else None
+    # Use ANNUAL revenue growth to match the annual balance-sheet RPO basis
+    # (the old code compared annual RPO growth against quarterly-YoY revenue growth).
+    rev_growth_pct = None
+    if inc is not None and not inc.empty:
+        for row in ['Total Revenue', 'Operating Revenue']:
+            if row in inc.index and len(inc.columns) >= 2:
+                cur, pri = inc.loc[row, inc.columns[0]], inc.loc[row, inc.columns[1]]
+                if pd.notna(cur) and pd.notna(pri) and pri > 0:
+                    rev_growth_pct = ((cur / pri) - 1) * 100
+                    break
+    if rev_growth_pct is None:
+        rev_growth = info.get('revenueGrowth')
+        rev_growth_pct = (rev_growth * 100) if rev_growth is not None else None
 
     signal = None
     signal_detail = None
     if rpo_growth_pct is not None and rev_growth_pct is not None:
         if rpo_growth_pct > rev_growth_pct + 5:
             signal = "STRONG LEAD"
-            signal_detail = f"RPO growing at {rpo_growth_pct:.0f}% vs revenue at {rev_growth_pct:.0f}% — contracted backlog suggests revenue acceleration ahead"
+            signal_detail = f"Deferred revenue growing {rpo_growth_pct:.0f}% vs revenue {rev_growth_pct:.0f}% — contracted backlog suggests acceleration ahead"
         elif rpo_growth_pct > rev_growth_pct:
             signal = "MODEST LEAD"
-            signal_detail = f"RPO growing at {rpo_growth_pct:.0f}% vs revenue at {rev_growth_pct:.0f}% — slight leading edge"
+            signal_detail = f"Deferred revenue growing {rpo_growth_pct:.0f}% vs revenue {rev_growth_pct:.0f}% — slight leading edge"
         elif rpo_growth_pct < rev_growth_pct - 5:
             signal = "LAGGING"
-            signal_detail = f"RPO growth ({rpo_growth_pct:.0f}%) trailing revenue growth ({rev_growth_pct:.0f}%) — backlog may be depleting"
+            signal_detail = f"Deferred-revenue growth ({rpo_growth_pct:.0f}%) trailing revenue ({rev_growth_pct:.0f}%) — backlog may be depleting"
         else:
             signal = "ALIGNED"
-            signal_detail = "RPO and revenue growth roughly aligned"
+            signal_detail = "Deferred revenue and revenue growth roughly aligned"
 
     return {
         'deferred_revenue_current': deferred_rev_current,
@@ -832,113 +875,109 @@ def rpo_analysis(data):
         'revenue_growth_pct': rev_growth_pct,
         'leading_indicator_signal': signal,
         'signal_detail': signal_detail,
-        'benchmark': 'RPO growth > revenue growth = leading indicator of acceleration',
+        'is_proxy': True,
+        'metric_label': 'Deferred Revenue (partial RPO proxy)',
+        'note': 'Balance-sheet deferred revenue only — excludes unbilled contracted backlog, which is the majority of true ASC 606 RPO for multi-year contracts. Annual basis.',
+        'benchmark': 'Deferred-revenue growth > revenue growth = possible leading indicator (partial proxy)',
     }
 
 
 def net_revenue_retention_estimate(data):
-    """Calculate NRR via Revenue Per Share trend (proxy).
-    High NRR (>120%) = 'installed growth' — business grows even with zero new customers."""
+    """Revenue Retention PROXY from the total-revenue trend (YoY).
+
+    IMPORTANT: this is NOT true Net Revenue Retention. Real NRR isolates spend
+    changes within the *existing* customer cohort and cannot be derived from public
+    filings. This proxy uses TOTAL revenue, so it INCLUDES new-customer revenue and
+    is therefore a CEILING on real organic retention. It uses total revenue (not
+    revenue-per-share) so that buybacks and dilution do not distort it.
+    Read it as 'revenue momentum', not as guaranteed installed growth."""
     info = data['info']
     inc_q = data['income_quarterly']
     nrr_estimate = None
-    revenue_per_share_trend = []
+    rev_trend = []
 
-    shares = None
+    revs = None
     if inc_q is not None and not inc_q.empty:
-        for row in ['Diluted Average Shares', 'Basic Average Shares']:
-            if row in inc_q.index and len(inc_q.columns) >= 2:
-                shares = [inc_q.loc[row, col] for col in inc_q.columns[:8] if pd.notna(inc_q.loc[row, col])]
+        for row in ['Total Revenue', 'Operating Revenue']:
+            if row in inc_q.index:
+                revs = [inc_q.loc[row, col] for col in inc_q.columns[:min(8, len(inc_q.columns))]
+                        if pd.notna(inc_q.loc[row, col]) and inc_q.loc[row, col] > 0]
                 break
 
-    if shares and len(shares) >= 4:
-        revs = None
-        if inc_q is not None:
-            for row in ['Total Revenue', 'Operating Revenue']:
-                if row in inc_q.index:
-                    revs = [inc_q.loc[row, col] for col in inc_q.columns[:min(8, len(inc_q.columns))]
-                            if pd.notna(inc_q.loc[row, col])]
-                    break
-        if revs and len(revs) >= 4:
-            min_len = min(len(revs), len(shares))
-            for i in range(min_len):
-                if shares[i] > 0:
-                    rps = revs[i] / shares[i]
-                    revenue_per_share_trend.append(rps)
-            if len(revenue_per_share_trend) >= 4:
-                ttm_rps_current = sum(revenue_per_share_trend[:4])
-                ttm_rps_prior = sum(revenue_per_share_trend[4:8]) if len(revenue_per_share_trend) >= 8 else sum(revenue_per_share_trend[4:])
-                if ttm_rps_prior > 0:
-                    nrr_estimate = (ttm_rps_current / ttm_rps_prior) * 100
+    basis = None
+    if revs:
+        rev_trend = revs
+        if len(revs) >= 8:
+            # Smooth: trailing-twelve-months vs the prior twelve months
+            ttm_current, ttm_prior = sum(revs[:4]), sum(revs[4:8])
+            if ttm_prior > 0:
+                nrr_estimate = (ttm_current / ttm_prior) * 100
+                basis = 'TTM vs prior TTM'
+        elif len(revs) >= 5:
+            # Fallback: most-recent quarter vs the same quarter a year ago
+            if revs[4] > 0:
+                nrr_estimate = (revs[0] / revs[4]) * 100
+                basis = 'latest quarter vs same quarter last year'
 
-    # Cap at 200% — revenue-per-share proxy can overshoot for hyper-growth companies
+    # Cap at 200% — the proxy can overshoot for hyper-growth companies
     nrr_capped = False
     if nrr_estimate is not None and nrr_estimate > 200:
         nrr_estimate = 200.0
         nrr_capped = True
 
     assessment = None
-    installed_growth_note = None
+    retention_note = None
     if nrr_estimate is not None:
         if nrr_estimate >= 130:
-            assessment = "World-class — massive expansion within existing customers"
-            installed_growth_note = "Even with ZERO new customers, revenue grows 30%+ next year from existing clients expanding"
+            assessment = "Rapid revenue compounding (proxy)"
+            retention_note = "Total revenue up 30%+ YoY — but includes new customers, so true organic retention is lower"
         elif nrr_estimate >= 120:
-            assessment = "Exceptional — 'installed growth' engine: 20%+ organic expansion guaranteed"
-            installed_growth_note = "Even with ZERO new customers, revenue grows ~20% next year from existing clients expanding"
+            assessment = "Strong revenue compounding (proxy)"
+            retention_note = "Total revenue up ~20%+ YoY — a ceiling on organic retention (includes new logos)"
         elif nrr_estimate >= 106:
-            assessment = "Healthy — above the 2026 benchmark of 106%"
-            installed_growth_note = "Existing customers are expanding — organic growth is built in"
+            assessment = "Healthy revenue trend (proxy)"
+            retention_note = "Above the 2026 benchmark on a total-revenue basis"
         elif nrr_estimate >= 100:
-            assessment = "Stable — maintaining existing revenue, no expansion"
-            installed_growth_note = "No organic expansion from existing base — growth depends entirely on new customers"
+            assessment = "Flat revenue (proxy)"
+            retention_note = "Revenue roughly flat YoY — limited organic momentum"
         elif nrr_estimate >= 90:
-            assessment = "Concerning — shrinking within existing accounts"
-            installed_growth_note = "Existing customers are contracting — new customer acquisition must overcome the leakage"
+            assessment = "Soft revenue trend (proxy)"
+            retention_note = "Total revenue declining — organic base likely contracting"
         else:
-            assessment = "Critical — significant customer contraction"
-            installed_growth_note = "Severe churn/contraction — business may be structurally declining"
+            assessment = "Declining revenue (proxy)"
+            retention_note = "Material revenue contraction"
 
     return {
         'estimated_nrr_pct': nrr_estimate,
+        'is_proxy': True,
+        'metric_label': 'Rev Retention (proxy)',
+        'basis': basis,
         'nrr_capped': nrr_capped,
-        'revenue_per_share_trend': revenue_per_share_trend,
-        'benchmark': '≥106% (standard), ≥120% (installed growth engine)',
+        'revenue_trend': rev_trend,
+        'benchmark': 'Proxy from total revenue — a ceiling on true NRR. >=106% healthy, >=120% compounding',
         'assessment': assessment,
-        'installed_growth_note': installed_growth_note,
-        'why_forward_looking': "High NRR means 'installed growth' — the company grows even without new customers. It's the most predictable form of future revenue.",
+        'installed_growth_note': retention_note,
+        'why_forward_looking': "Revenue-retention PROXY from the total-revenue trend. NOT cohort NRR — it includes new customers and so overstates true retention. Treat as revenue momentum, not guaranteed installed growth.",
     }
 
 
 def forward_rule_of_40(data):
-    """Calculate Forward Rule of 40 using analyst estimates for next year.
-    Uses forward P/E + forward EPS to derive forward revenue growth and margins.
-    Identifies inflection points where Forward R40 crosses key benchmarks vs trailing."""
+    """Forward Rule of 40 = forward revenue growth + forward FCF margin.
+
+    Yahoo does NOT expose analyst REVENUE estimates, so the forward revenue-growth
+    term is held at the trailing rate and the genuine forward signal comes from
+    expected MARGIN EXPANSION — bounded — implied when forward earnings are set to
+    outpace revenue. The 'inflection' therefore measures expected margin improvement
+    at a constant growth rate. (The previous version compared forward EARNINGS growth
+    against trailing REVENUE growth — an apples-to-oranges mismatch that fired false
+    'MASSIVE INFLECTION' signals; that is removed here.)"""
     info = data['info']
     inc = data['income_annual']
 
-    # --- Derive forward revenue growth from analyst estimates ---
     fwd_eps = info.get('forwardEps')
     trailing_eps = info.get('trailingEps')
-    fwd_pe = info.get('forwardPE')
-    price = data.get('price')
-    shares_out = info.get('sharesOutstanding')
-    trailing_ni = None
-    if inc is not None and not inc.empty:
-        for row in ['Net Income', 'Net Income Common Stockholders']:
-            if row in inc.index and len(inc.columns) > 0:
-                trailing_ni = inc.loc[row, inc.columns[0]]
-                if pd.notna(trailing_ni):
-                    break
+    trailing_fcf = info.get('freeCashflow')
 
-    forward_ni = None
-    if fwd_eps and shares_out and shares_out > 0:
-        forward_ni = fwd_eps * shares_out
-
-    # Forward revenue growth: from forward NI / trailing net margin, or EPS growth
-    fwd_rev_growth_pct = None
-    fwd_rev_growth_source = None
-    trailing_net_margin = info.get('profitMargins')
     rev_ttm = None
     if inc is not None and not inc.empty:
         for row in ['Total Revenue', 'Operating Revenue']:
@@ -947,115 +986,72 @@ def forward_rule_of_40(data):
                 if pd.notna(rev_ttm) and rev_ttm > 0:
                     break
 
-    # Method 1: Forward NI / trailing net margin → forward revenue → growth
-    if forward_ni and trailing_net_margin and trailing_net_margin > 0 and rev_ttm and rev_ttm > 0:
-        fwd_rev_est = forward_ni / trailing_net_margin
-        fwd_rev_growth_pct = ((fwd_rev_est / rev_ttm) - 1) * 100
-        fwd_rev_growth_source = 'Derived from forward EPS + trailing net margin'
+    trailing_rev_growth_pct = (info.get('revenueGrowth') * 100) if info.get('revenueGrowth') is not None else None
+    trailing_fcf_margin_pct = (trailing_fcf / rev_ttm * 100) if (trailing_fcf and rev_ttm and rev_ttm > 0) else None
 
-    # Method 2: EPS growth as proxy for revenue growth
-    if fwd_rev_growth_pct is None and fwd_eps and trailing_eps and trailing_eps > 0:
-        eps_growth = ((fwd_eps / trailing_eps) - 1) * 100
-        fwd_rev_growth_pct = eps_growth
-        fwd_rev_growth_source = 'Forward EPS growth (proxy for revenue growth)'
+    # Forward EPS growth — the one genuine forward input Yahoo provides
+    fwd_eps_growth_pct = None
+    has_forward_estimate = False
+    if fwd_eps and trailing_eps and trailing_eps > 0:
+        fwd_eps_growth_pct = ((fwd_eps / trailing_eps) - 1) * 100
+        has_forward_estimate = True
 
-    # Method 3: Trailing growth (fallback)
-    if fwd_rev_growth_pct is None:
-        rev_growth = info.get('revenueGrowth')
-        if rev_growth is not None:
-            fwd_rev_growth_pct = rev_growth * 100
-            fwd_rev_growth_source = 'Trailing growth (no forward estimate available)'
+    # Forward revenue growth: no revenue estimate is available, so hold at trailing.
+    fwd_rev_growth_pct = trailing_rev_growth_pct
+    fwd_rev_growth_source = 'Trailing rate (data source exposes no forward revenue estimate)'
 
-    # --- Forward FCF Margin ---
-    trailing_fcf = info.get('freeCashflow')
-    fcf_conversion = (trailing_fcf / trailing_ni) if (trailing_fcf and trailing_ni and trailing_ni > 0) else None
-
+    # Forward FCF margin: trailing margin + bounded margin expansion implied when
+    # earnings are expected to grow faster than revenue.
     fwd_fcf_margin_pct = None
-    fwd_fcf_margin_source = None
+    margin_expansion_pct = 0.0
+    if trailing_fcf_margin_pct is not None:
+        if fwd_eps_growth_pct is not None and trailing_rev_growth_pct is not None:
+            implied = (fwd_eps_growth_pct - trailing_rev_growth_pct) * 0.3   # partial pass-through
+            margin_expansion_pct = max(-15.0, min(15.0, implied))            # bound the estimate
+        fwd_fcf_margin_pct = trailing_fcf_margin_pct + margin_expansion_pct
 
-    # Method A: Forward FCF = forward NI × FCF conversion → margin
-    if forward_ni and fcf_conversion and fcf_conversion > 0 and rev_ttm and rev_ttm > 0:
-        # Estimate forward revenue first
-        if trailing_net_margin and trailing_net_margin > 0:
-            fwd_rev_est = forward_ni / trailing_net_margin
-            fwd_fcf_est = forward_ni * fcf_conversion
-            fwd_fcf_margin_pct = (fwd_fcf_est / fwd_rev_est) * 100
-        else:
-            fwd_fcf_est = forward_ni * fcf_conversion
-            fwd_fcf_margin_pct = (fwd_fcf_est / rev_ttm) * 100
-        fwd_fcf_margin_source = 'Forward NI × historical FCF conversion'
-
-    # Method B: Assume margin improvement if EPS growing faster than revenue
-    if fwd_fcf_margin_pct is None and trailing_fcf and rev_ttm and rev_ttm > 0:
-        trailing_fcf_margin = (trailing_fcf / rev_ttm) * 100
-        # If forward EPS growth > trailing rev growth, margin likely expanding
-        if fwd_eps and trailing_eps and trailing_eps > 0:
-            eps_growth = ((fwd_eps / trailing_eps) - 1) * 100
-            rev_growth = info.get('revenueGrowth', 0) * 100
-            margin_expansion = eps_growth - rev_growth
-            fwd_fcf_margin_pct = trailing_fcf_margin + (margin_expansion * 0.3)  # partial pass-through
-            fwd_fcf_margin_source = 'Trailing FCF margin + estimated margin expansion from EPS growth'
-        else:
-            fwd_fcf_margin_pct = trailing_fcf_margin
-            fwd_fcf_margin_source = 'Trailing FCF margin (no forward margin data)'
-
-    # --- Forward R40 ---
+    # Forward & trailing Rule of 40 — both use trailing revenue growth, so the only
+    # difference between them is the (bounded) margin-expansion term.
     forward_rule_40_val = None
     if fwd_rev_growth_pct is not None and fwd_fcf_margin_pct is not None:
-        forward_rule_40_val = fwd_rev_growth_pct + fwd_fcf_margin_pct
-        # Sanity cap at 200 — above this, estimation noise dominates
-        if forward_rule_40_val > 200:
-            forward_rule_40_val = 200.0
-        if forward_rule_40_val < -50:
-            forward_rule_40_val = -50.0
+        forward_rule_40_val = max(-50.0, min(200.0, fwd_rev_growth_pct + fwd_fcf_margin_pct))
 
-    # --- Trailing R40 ---
     trailing_r40 = None
-    rev_growth_trailing = info.get('revenueGrowth')
-    if rev_growth_trailing is not None and trailing_fcf and rev_ttm and rev_ttm > 0:
-        trailing_fcf_margin = (trailing_fcf / rev_ttm) * 100
-        trailing_r40 = (rev_growth_trailing * 100) + trailing_fcf_margin
+    if trailing_rev_growth_pct is not None and trailing_fcf_margin_pct is not None:
+        trailing_r40 = trailing_rev_growth_pct + trailing_fcf_margin_pct
 
-    # --- Inflection detection ---
+    # --- Inflection detection (gap == bounded margin expansion) ---
     inflection_signal = None
     inflection_detail = None
-    has_forward_estimate = fwd_rev_growth_source and 'Trailing' not in fwd_rev_growth_source
-
     if trailing_r40 is not None and forward_rule_40_val is not None:
         gap = forward_rule_40_val - trailing_r40
-        if abs(gap) < 3 and not has_forward_estimate:
+        if not has_forward_estimate:
             inflection_signal = "TRAILING ONLY"
-            inflection_detail = "Forward estimates unavailable — showing trailing data. No inflection signal possible."
-        elif gap >= 20:
-            inflection_signal = "MASSIVE INFLECTION"
-            inflection_detail = f"Forward R40 ({forward_rule_40_val:.0f}) is {gap:.0f} pts above trailing ({trailing_r40:.0f}) — potential turnaround or new product cycle"
+            inflection_detail = "No forward estimate available — showing trailing data; no inflection signal possible."
         elif gap >= 10:
             inflection_signal = "POSITIVE INFLECTION"
-            inflection_detail = f"Forward R40 ({forward_rule_40_val:.0f}) is {gap:.0f} pts above trailing ({trailing_r40:.0f}) — improvement ahead"
-        elif gap >= 3:
+            inflection_detail = f"Forward R40 ({forward_rule_40_val:.0f}) ~{gap:.0f} pts above trailing ({trailing_r40:.0f}) on expected margin expansion (earnings set to outpace revenue)"
+        elif gap >= 4:
             inflection_signal = "MODEST IMPROVEMENT"
-            inflection_detail = f"Forward R40 ({forward_rule_40_val:.0f}) slightly above trailing ({trailing_r40:.0f})"
-        elif gap <= -20:
-            inflection_signal = "SEVERE DECLINE"
-            inflection_detail = f"Forward R40 ({forward_rule_40_val:.0f}) is {abs(gap):.0f} pts BELOW trailing ({trailing_r40:.0f}) — significant deterioration expected"
+            inflection_detail = f"Forward R40 ({forward_rule_40_val:.0f}) modestly above trailing ({trailing_r40:.0f}) on margin expansion"
         elif gap <= -10:
             inflection_signal = "NEGATIVE INFLECTION"
-            inflection_detail = f"Forward R40 ({forward_rule_40_val:.0f}) declining vs trailing ({trailing_r40:.0f})"
-        elif gap <= -3:
+            inflection_detail = f"Forward R40 ({forward_rule_40_val:.0f}) below trailing ({trailing_r40:.0f}) — margins/earnings expected to compress"
+        elif gap <= -4:
             inflection_signal = "MODEST DECLINE"
-            inflection_detail = "Forward R40 slightly below trailing"
+            inflection_detail = "Forward R40 slightly below trailing on expected margin compression"
         else:
             inflection_signal = "STABLE"
             inflection_detail = "Forward R40 in line with trailing"
 
-        if trailing_r40 < 40 and forward_rule_40_val >= 40:
+        if has_forward_estimate and trailing_r40 < 40 <= forward_rule_40_val:
             inflection_signal = "BENCHMARK CROSSOVER"
-            inflection_detail += " — CROSSING the 40 benchmark. This is the inflection point to buy before the market notices."
+            inflection_detail += " — crossing the 40 benchmark on forward estimates."
 
     assessment = None
     if forward_rule_40_val is not None:
         if forward_rule_40_val >= 50:
-            assessment = "Elite (Forward) — premium multiple justified on future cash flows"
+            assessment = "Elite (Forward) — premium multiple justified on forward cash flows"
         elif forward_rule_40_val >= 40:
             assessment = "Strong (Forward) — meets 2026 benchmark on forward estimates"
         elif forward_rule_40_val >= 30:
@@ -1069,15 +1065,17 @@ def forward_rule_of_40(data):
         'forward_rev_growth_pct': fwd_rev_growth_pct,
         'forward_rev_growth_source': fwd_rev_growth_source,
         'forward_fcf_margin_pct': fwd_fcf_margin_pct,
-        'forward_fcf_margin_source': fwd_fcf_margin_source,
+        'forward_fcf_margin_source': 'Trailing FCF margin + bounded margin expansion (forward earnings vs revenue)',
+        'forward_eps_growth_pct': fwd_eps_growth_pct,
+        'margin_expansion_pct': round(margin_expansion_pct, 1),
         'forward_rule_40': forward_rule_40_val,
         'trailing_rule_40': trailing_r40,
         'has_forward_estimate': has_forward_estimate,
         'inflection_signal': inflection_signal,
         'inflection_detail': inflection_detail,
         'assessment': assessment,
-        'benchmark': '>=40 (Forward), inflection when trailing <40 and forward >=40',
-        'why_forward_looking': "The market prices stocks on future cash flows. A company can have a failing Trailing Rule of 40 today but a passing Forward Rule of 40 as new data centers or products come online.",
+        'benchmark': '>=40 (Forward); inflection reflects expected margin expansion, not revenue estimates',
+        'why_forward_looking': "Yahoo exposes forward EPS but not forward revenue, so the forward signal is expected MARGIN expansion (earnings outpacing revenue) at a constant growth rate. Honest about its inputs rather than implying a revenue forecast.",
     }
 
 
@@ -1333,71 +1331,108 @@ def moat_analysis(info, gm=None):
 
 def moat_performance_signals(info, data):
     """Determine if the moat is Compounding, Defending, or Decaying.
-    - Compounding: declining CAC, rising price premiums
-    - Defending: stable market share
-    - Decaying: multi-homing increasing, competitors closing cost gaps"""
+
+    Driven PRIMARILY by quantitative evidence — revenue growth, gross-margin level,
+    gross-margin TREND (expanding margins = strengthening pricing power), ROE and
+    operating margin. Description keywords are only small tie-breakers, so the verdict
+    no longer hinges on the tone of the IR copywriting (the previous version flipped
+    to DECAYING merely because a filing mentioned 'competition')."""
 
     desc = (info.get('longBusinessSummary') or '').lower()
-
-    # Check for moat deterioration signals
     decay_signals = []
     compound_signals = []
     defend_signals = []
+    score = 0
+    have_quant = False
 
-    # Revenue growth trajectory
+    # --- Gross-margin TREND (most direct moat-trajectory signal) ---
+    inc = data.get('income_annual')
+    gm_trend_pp = None
+    if inc is not None and not inc.empty and len(inc.columns) >= 2 and 'Gross Profit' in inc.index and 'Total Revenue' in inc.index:
+        try:
+            gp0, rv0 = inc.loc['Gross Profit', inc.columns[0]], inc.loc['Total Revenue', inc.columns[0]]
+            gp1, rv1 = inc.loc['Gross Profit', inc.columns[1]], inc.loc['Total Revenue', inc.columns[1]]
+            if pd.notna(gp0) and pd.notna(rv0) and rv0 > 0 and pd.notna(gp1) and pd.notna(rv1) and rv1 > 0:
+                gm_trend_pp = (gp0 / rv0 - gp1 / rv1) * 100
+        except Exception:
+            gm_trend_pp = None
+    if gm_trend_pp is not None:
+        have_quant = True
+        if gm_trend_pp > 1:
+            score += 2; compound_signals.append(f"Gross margin expanding (+{gm_trend_pp:.1f}pp YoY) — pricing power strengthening")
+        elif gm_trend_pp < -1:
+            score -= 2; decay_signals.append(f"Gross margin compressing ({gm_trend_pp:.1f}pp YoY) — pricing power eroding")
+
+    # --- Revenue growth trajectory ---
     rev_growth = info.get('revenueGrowth')
     if rev_growth is not None:
+        have_quant = True
         if rev_growth > 0.25:
-            compound_signals.append("Strong revenue momentum — moat likely expanding")
+            score += 2; compound_signals.append(f"Strong revenue momentum (+{rev_growth*100:.0f}%) — share likely expanding")
+        elif rev_growth > 0.10:
+            score += 1
         elif rev_growth < -0.05:
-            decay_signals.append("Revenue declining — moat may be eroding")
+            score -= 2; decay_signals.append(f"Revenue declining ({rev_growth*100:.0f}%) — moat may be eroding")
+        elif rev_growth < 0:
+            score -= 1
 
-    # Gross margin trajectory
+    # --- Gross-margin level ---
     gm = info.get('grossMargins')
     if gm is not None:
+        have_quant = True
         if gm > 0.70:
-            compound_signals.append("High gross margins sustained — pricing power intact")
-        elif gm < 0.15:
-            decay_signals.append("Thin margins — limited pricing power")
+            score += 1; compound_signals.append(f"High gross margin ({gm*100:.0f}%) sustained — pricing power")
+        elif gm < 0.20:
+            score -= 1; decay_signals.append(f"Thin gross margin ({gm*100:.0f}%) — limited pricing power")
 
-    # Competitive language in description
-    competition_kw = ['competitive', 'competition', 'intense competition', 'price pressure',
-                      'commoditization', 'substitute', 'alternative']
-    for kw in competition_kw:
-        if kw in desc:
-            decay_signals.append(f"Competitive pressure acknowledged: '{kw}'")
-            break
+    # --- Returns on capital / operating efficiency ---
+    roe = info.get('returnOnEquity')
+    if roe is not None:
+        have_quant = True
+        if roe > 0.20:
+            score += 1
+        elif roe < 0:
+            score -= 1; decay_signals.append("Negative return on equity")
+    opm = info.get('operatingMargins')
+    if opm is not None:
+        have_quant = True
+        if opm > 0.20:
+            score += 1
+        elif opm < 0:
+            score -= 1; decay_signals.append("Operating at a loss")
 
-    innovation_kw = ['innovation', 'breakthrough', 'first-to-market', 'industry-leading',
-                     'disruptive', 'revolutionary', 'best-in-class']
-    for kw in innovation_kw:
-        if kw in desc:
-            compound_signals.append(f"Innovation advantage: '{kw}'")
-            break
+    # --- Description keywords: small tie-breakers only (±1 max each) ---
+    if any(kw in desc for kw in ['intense competition', 'price pressure', 'commoditization', 'pricing pressure']):
+        score -= 1; decay_signals.append("Filing flags pricing/competitive pressure")
+    if any(kw in desc for kw in ['first-to-market', 'industry-leading', 'market leader', 'proprietary']):
+        score += 1
 
-    # Determine overall state
-    total_signals = len(compound_signals) + len(defend_signals) + len(decay_signals)
-    if total_signals == 0:
+    # --- Decide ---
+    if not have_quant:
         performance = "INSUFFICIENT DATA"
         performance_label = "Cannot determine moat trajectory from available data"
         performance_color = "#6b7280"
-    elif len(compound_signals) >= len(decay_signals) + 2:
+    elif score >= 3:
         performance = "COMPOUNDING"
-        performance_label = "Moat is strengthening — declining CAC, rising price premiums, expanding market share"
+        performance_label = "Strengthening — expanding margins, strong growth, healthy returns on capital"
         performance_color = "#16a34a"
-    elif len(decay_signals) > len(compound_signals):
+    elif score <= -2:
         performance = "DECAYING"
-        performance_label = "Moat is eroding — competitors closing gaps, multi-homing increasing, pricing power weakening"
+        performance_label = "Eroding — compressing margins, weak growth, or deteriorating returns"
         performance_color = "#dc2626"
     else:
         performance = "DEFENDING"
-        performance_label = "Moat is stable — maintaining share, steady pricing, no significant erosion or expansion"
+        performance_label = "Stable — steady margins and growth, no material erosion or expansion"
         performance_color = "#ea580c"
+        if not compound_signals and not decay_signals:
+            defend_signals.append("Metrics steady — no strong trajectory either way")
 
     return {
         'performance': performance,
         'performance_label': performance_label,
         'performance_color': performance_color,
+        'trajectory_score': score,
+        'gross_margin_trend_pp': round(gm_trend_pp, 1) if gm_trend_pp is not None else None,
         'compound_signals': compound_signals,
         'defend_signals': defend_signals,
         'decay_signals': decay_signals,
@@ -1764,6 +1799,52 @@ def portfolio_optimization_suggestions(ticker, data, existing_positions):
 
 
 # ===========================================================================
+# CONVICTION & SCREENER TIERS — single source of truth
+# ===========================================================================
+
+# Forward-R40 inflection labels treated as a bullish growth signal
+BULLISH_INFLECTIONS = ('POSITIVE INFLECTION', 'BENCHMARK CROSSOVER', 'MASSIVE INFLECTION')
+
+
+def has_growth_signal(nrr_pct, fwd_inflection):
+    """A 'growth signal' = strong revenue-retention proxy OR a bullish forward inflection."""
+    return (nrr_pct is not None and nrr_pct >= 120) or (fwd_inflection in BULLISH_INFLECTIONS)
+
+
+def assess_conviction(moat_rating, risk_score, nrr_pct, fwd_inflection, moat_trend):
+    """Single conviction rubric used everywhere. Returns (tier, detail)."""
+    growth = has_growth_signal(nrr_pct, fwd_inflection)
+    decaying = (moat_trend == 'DECAYING')
+    if moat_rating >= 7 and risk_score <= 2 and growth and not decaying:
+        return ("HIGH CONVICTION",
+                "Wide moat + growth signal + clean risk. Core position, subject to the risk-based NAV cap.")
+    if moat_rating >= 5 and risk_score <= 4 and not decaying:
+        return ("MODERATE CONVICTION",
+                "Solid fundamentals with manageable risk. Consider barbell pairing.")
+    if moat_rating >= 5:
+        return ("SELECTIVE",
+                "Good moat but elevated risk or a decaying trend — reduce size, tighten mental stops.")
+    if risk_score <= 3:
+        return ("OPPORTUNISTIC",
+                "Limited moat but favorable risk/reward — trade, don't marry.")
+    return ("PASS",
+            "Neither a strong moat nor a clean risk profile. Better opportunities exist.")
+
+
+def assign_screen_tier(moat_rating, risk_score, moat_trend, nrr_pct, fwd_inflection, circ_delta):
+    """Single screener-tier rubric used by BOTH the app and CLI screeners.
+    Returns 'PLATINUM' | 'GOLD' | 'SILVER' | None."""
+    growth = has_growth_signal(nrr_pct, fwd_inflection)
+    if moat_rating >= 6 and risk_score <= 1 and moat_trend == 'COMPOUNDING' and growth:
+        return 'PLATINUM'
+    if moat_rating >= 5 and risk_score <= 2 and growth:
+        return 'GOLD'
+    if moat_rating >= 4 and risk_score <= 4 and (circ_delta or 0) >= 4:
+        return 'SILVER'
+    return None
+
+
+# ===========================================================================
 # INVESTMENT THESIS GENERATOR
 # ===========================================================================
 
@@ -1850,27 +1931,13 @@ def generate_thesis(ticker, data, quantitative, qualitative, thematic, risk, nob
 
     thesis_text = '. '.join(parts) + '.'
 
-    # Conviction
+    # Conviction (single source of truth — see assess_conviction)
     moat_rating = moat['moat_rating']
     risk_score = risk_factors.get('risk_score', 5)
     fwd_inflection = fwd_r40.get('inflection_signal', '')
-    nrr_high = nrr_pct is not None and nrr_pct >= 120
-
-    if moat_rating >= 7 and risk_score <= 2 and nrr_high:
-        conviction = "HIGH CONVICTION"
-        conviction_detail = "Wide moat + installed growth engine + clean risk profile. Core portfolio position subject to 10% NAV cap."
-    elif moat_rating >= 5 and risk_score <= 4:
-        conviction = "MODERATE CONVICTION"
-        conviction_detail = "Solid fundamentals with manageable risks. Consider barbell pairing."
-    elif moat_rating >= 5:
-        conviction = "SELECTIVE"
-        conviction_detail = "Good moat but elevated risk — reduce position size, tighten mental stop-losses."
-    elif risk_score <= 3:
-        conviction = "OPPORTUNISTIC"
-        conviction_detail = "Limited moat but favorable risk/reward — trade, don't marry."
-    else:
-        conviction = "PASS"
-        conviction_detail = "Neither strong moat nor clean risk profile. Better opportunities exist."
+    moat_trend = perf.get('performance', '')
+    conviction, conviction_detail = assess_conviction(
+        moat_rating, risk_score, nrr_pct, fwd_inflection, moat_trend)
 
     return {
         'thesis': thesis_text,
@@ -1969,7 +2036,7 @@ def traditional_value_filter(data):
     fwd_pe = info.get('forwardPE')
     pb = info.get('priceToBook')
     ps = info.get('priceToSales')
-    div_yield = info.get('dividendYield')
+    div_yield = dividend_yield_pct(info)  # normalized to a percent (e.g. 2.5 = 2.5%)
     dte = info.get('debtToEquity')
     roe = info.get('returnOnEquity')
     beta = info.get('beta')
@@ -2026,12 +2093,11 @@ def traditional_value_filter(data):
             concerns.append(f"High P/B of {pb:.1f}x — paying significant premium to book")
 
     # Dividend
-    if div_yield is not None:
-        div_pct = div_yield * 100 if div_yield < 1 else div_yield
-        if div_pct > 4:
-            signals.append(f"Strong dividend yield — {div_pct:.1f}%")
-        elif div_pct > 2:
-            signals.append(f"Moderate dividend yield — {div_pct:.1f}%")
+    if div_yield is not None and div_yield > 0:
+        if div_yield > 4:
+            signals.append(f"Strong dividend yield — {div_yield:.1f}%")
+        elif div_yield > 2:
+            signals.append(f"Moderate dividend yield — {div_yield:.1f}%")
 
     # Debt
     if dte is not None:
@@ -2063,7 +2129,7 @@ def traditional_value_filter(data):
     value_score = 5
     if tpe is not None and 0 < tpe < 15: value_score += 1
     if pb is not None and pb < 2: value_score += 1
-    if div_yield is not None and div_yield > 0.03: value_score += 1
+    if div_yield is not None and div_yield > 3: value_score += 1  # >3% yield
     if dte is not None and dte < 50: value_score += 1
     if earnings_volatility is not None and earnings_volatility < 0.2: value_score += 1
     if rev_growth is not None and rev_growth > 0: value_score += 1
@@ -2084,7 +2150,7 @@ def traditional_value_filter(data):
         'forward_pe': fwd_pe,
         'price_to_book': pb,
         'price_to_sales': ps,
-        'dividend_yield_pct': (div_yield * 100 if div_yield and div_yield < 1 else div_yield),
+        'dividend_yield_pct': div_yield,  # already a percent
         'debt_to_equity': dte,
         'return_on_equity': (roe * 100) if roe is not None else None,
         'earnings_volatility': round(earnings_volatility, 3) if earnings_volatility is not None else None,
@@ -2201,11 +2267,14 @@ def high_growth_general_filter(data):
 # MASTER ALPHA ANALYSIS
 # ===========================================================================
 
-def alpha_analysis(ticker, existing_positions=None, current_weight_pct=0, framework=None):
+def alpha_analysis(ticker, existing_positions=None, current_weight_pct=0, framework=None, data=None):
     """Run the complete 2026 Strategic Growth Investment Framework analysis.
-    Pass framework='high_growth_saas', 'traditional_value', etc. to override auto-detection."""
+    Pass framework='high_growth_saas', 'traditional_value', etc. to override auto-detection.
+    Pass a pre-fetched `data` dict (from fetch_alpha_data) to skip the network call —
+    this lets callers cache the slow Yahoo fetch separately from the cheap compute."""
     ticker = ticker.upper().strip()
-    data = fetch_alpha_data(ticker)
+    if data is None:
+        data = fetch_alpha_data(ticker)
     info = data['info']
 
     if not info or info.get('marketCap') is None:

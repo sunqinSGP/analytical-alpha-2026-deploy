@@ -11,15 +11,35 @@ import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from stock_analyzer.alpha_engine import alpha_analysis, THEMES_2026, NoB_TYPES
+from stock_analyzer.alpha_engine import (
+    alpha_analysis, fetch_alpha_data, format_market_cap, assign_screen_tier,
+    THEMES_2026, NoB_TYPES,
+)
+from stock_analyzer.verdict import CONV_COLORS, build_factor_attribution, recommendation_for
 
 # Page config
 st.set_page_config(
     page_title="Analytical Alpha 2026",
-    page_icon="",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+
+# ===========================================================================
+# Cached data layer — fetch (slow, network) is cached separately from compute,
+# so changing the position % or framework never re-hits Yahoo. This is what
+# keeps Streamlit Cloud's shared IP from being rate-limited.
+# ===========================================================================
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_fetch(tkr):
+    return fetch_alpha_data(tkr)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_analysis(tkr, weight_pct, framework):
+    data = cached_fetch(tkr)
+    return alpha_analysis(tkr, current_weight_pct=weight_pct, framework=framework, data=data)
 
 # StockOracle-inspired CSS — clean, professional, color-coded health signals
 st.markdown("""
@@ -269,6 +289,62 @@ def moat_bar(rating):
 
 
 # ===========================================================================
+# Decision-first verdict layer — shared factor attribution + the hero band
+# ===========================================================================
+# CONV_COLORS, build_factor_attribution, recommendation_for are imported from
+# stock_analyzer.verdict (pure logic, unit-tested offline). Only rendering lives here.
+
+def render_verdict_hero(result, current_weight=0):
+    """The key message: action + conviction + suggested size + top drivers + risk + stop."""
+    conviction = result['thesis']['conviction']
+    ccolor = CONV_COLORS.get(conviction, '#6b7280')
+    rf = result['risk_management']['risk_factors']
+    max_pos = rf.get('max_suggested_position', 10)
+    action, acolor, asub = recommendation_for(conviction, max_pos, current_weight)
+
+    factors = build_factor_attribution(result)
+    bull = sorted([x for x in factors if x['ImpactNum'] > 0], key=lambda x: x['ImpactNum'], reverse=True)[:3]
+    bear = sorted([x for x in factors if x['ImpactNum'] < 0], key=lambda x: x['ImpactNum'])[:2]
+
+    def pill(x, positive):
+        c, bg, sign = ('#065f46', '#d1fae5', '▲') if positive else ('#991b1b', '#fee2e2', '▼')
+        return (f'<span style="display:inline-block;background:{bg};color:{c};padding:3px 10px;'
+                f'border-radius:12px;font-size:0.72rem;font-weight:700;margin:2px 4px 2px 0;">{sign} {x["Factor"]}</span>')
+
+    drivers = ''.join(pill(x, True) for x in bull) + ''.join(pill(x, False) for x in bear)
+    if not drivers:
+        drivers = '<span style="color:#94a3b8;font-size:0.72rem;">Insufficient data to attribute drivers</span>'
+
+    sev_order = {'High': 0, 'Medium': 1, 'Low': 2}
+    risks = sorted(rf.get('risks', []), key=lambda r: sev_order.get(r.get('severity', 'Low'), 3))
+    top_risk = f"{risks[0]['factor']} — {risks[0]['detail']}" if risks else 'No critical flags'
+    stop = result['risk_management']['mental_stop_loss']['thesis_break_threshold']
+
+    st.markdown(f'''
+    <div style="background:#fff;border:1px solid #e8ecf1;border-left:6px solid {ccolor};border-radius:14px;
+                padding:18px 22px;margin:6px 0 2px 0;box-shadow:0 2px 10px rgba(0,0,0,0.05);">
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <div style="font-size:1.5rem;font-weight:800;color:{acolor};letter-spacing:-0.01em;">{action}</div>
+        <div style="background:{ccolor};color:#fff;padding:3px 12px;border-radius:20px;font-size:0.72rem;font-weight:700;">{conviction}</div>
+        <div style="font-size:0.78rem;color:#475569;font-weight:600;">{asub}</div>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:28px;flex-wrap:wrap;">
+        <div style="flex:1.2;min-width:280px;">
+          <div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.08em;color:#94a3b8;font-weight:700;margin-bottom:6px;">Why</div>
+          <div>{drivers}</div>
+        </div>
+        <div style="flex:1;min-width:260px;">
+          <div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.08em;color:#94a3b8;font-weight:700;margin-bottom:4px;">Biggest risk</div>
+          <div style="font-size:0.75rem;color:#334155;font-weight:600;">{top_risk}</div>
+          <div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.08em;color:#94a3b8;font-weight:700;margin:8px 0 4px 0;">Thesis breaks if</div>
+          <div style="font-size:0.73rem;color:#334155;">{stop}</div>
+        </div>
+      </div>
+    </div>
+    ''', unsafe_allow_html=True)
+
+
+# ===========================================================================
 # HEADER
 # ===========================================================================
 # ===========================================================================
@@ -328,7 +404,7 @@ if not ticker:
     with c1:
         st.markdown("""
         <div class="alpha-card" style="text-align:center; min-height:130px;">
-            <span style="font-size:1.5rem;"></span>
+            <span style="font-size:1.5rem;">🧭</span>
             <div class="label" style="margin-top:6px;">NoB Classification</div>
             <div style="font-size:0.78rem;color:#444;margin-top:4px;">
             Auto-detects business model: SaaS, Semiconductor, Energy, Biopharma, Value, or Growth
@@ -338,7 +414,7 @@ if not ticker:
     with c2:
         st.markdown("""
         <div class="alpha-card" style="text-align:center; min-height:130px;">
-            <span style="font-size:1.5rem;"></span>
+            <span style="font-size:1.5rem;">🏰</span>
             <div class="label" style="margin-top:6px;">Circumvention Delta</div>
             <div style="font-size:0.78rem;color:#444;margin-top:4px;">
             Quantifies competitive moat: Time + Capital + Performance Loss = total competitor burden
@@ -348,17 +424,17 @@ if not ticker:
     with c3:
         st.markdown("""
         <div class="alpha-card" style="text-align:center; min-height:130px;">
-            <span style="font-size:1.5rem;"></span>
+            <span style="font-size:1.5rem;">🔭</span>
             <div class="label" style="margin-top:6px;">Forward-Looking</div>
             <div style="font-size:0.78rem;color:#444;margin-top:4px;">
-            RPO divergence, NRR installed growth, and Forward Rule of 40 inflection detection
+            Deferred-revenue & revenue-retention proxies plus Forward Rule of 40 margin inflection
             </div>
         </div>
         """, unsafe_allow_html=True)
     with c4:
         st.markdown("""
         <div class="alpha-card" style="text-align:center; min-height:130px;">
-            <span style="font-size:1.5rem;"></span>
+            <span style="font-size:1.5rem;">🌐</span>
             <div class="label" style="margin-top:6px;">2026 Macro Context</div>
             <div style="font-size:0.78rem;color:#444;margin-top:4px;">
             K-shaped economy, value rotation, S&P 7,500 target, and barbell portfolio strategy
@@ -395,12 +471,7 @@ if framework_choice != 'Auto-Detect':
     framework_override = FRAMEWORK_MAP.get(framework_choice)
 
 with st.spinner(f"Running 2026 Alpha Analysis on {ticker}..."):
-    import inspect
-    params = inspect.signature(alpha_analysis).parameters
-    if 'framework' in params:
-        result = alpha_analysis(ticker, current_weight_pct=weight_pct, framework=framework_override)
-    else:
-        result = alpha_analysis(ticker, current_weight_pct=weight_pct)
+    result = cached_analysis(ticker, weight_pct, framework_override)
 
 if 'error' in result:
     st.error(result['error'])
@@ -433,11 +504,15 @@ momentum = quant['momentum']
 arr = quant['arr_growth']
 risk_factors = risk_mgmt['risk_factors']
 
+# ---- VERDICT HERO (decision-first: the key message up top) ----
+render_verdict_hero(result, weight_pct)
+
+st.markdown('<div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.08em;color:#94a3b8;font-weight:700;margin:12px 0 2px 2px;">Supporting metrics</div>', unsafe_allow_html=True)
 c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
 with c1:
     st.markdown(f'<div class="kpi"><div class="kpi-label">Price</div><div class="kpi-value">{cs}{price:.2f}</div></div>', unsafe_allow_html=True)
 with c2:
-    st.markdown(f'<div class="kpi"><div class="kpi-label">Market Cap</div><div class="kpi-value">{cs}{mcap/1e9:.1f}B</div></div>' if mcap else '<div class="kpi"><div class="kpi-label">Market Cap</div><div class="kpi-value">N/A</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="kpi"><div class="kpi-label">Market Cap</div><div class="kpi-value">{format_market_cap(mcap, cs)}</div></div>', unsafe_allow_html=True)
 with c3:
     r40_val = r40.get('rule_40_fcf')
     c3_class = 'kpi signal-green' if (r40_val and r40_val >= 50) else ('kpi signal-amber' if (r40_val and r40_val >= 40) else 'kpi signal-red')
@@ -450,8 +525,8 @@ with c5:
     nrr = quant['net_revenue_retention']
     nrr_val = nrr.get('estimated_nrr_pct')
     c5_class = 'kpi signal-green' if (nrr_val and nrr_val >= 120) else ('kpi signal-blue' if (nrr_val and nrr_val >= 106) else 'kpi signal-amber')
-    nrr_sub_kpi = "Installed growth" if (nrr_val and nrr_val >= 120) else ("Above benchmark" if (nrr_val and nrr_val >= 106) else "")
-    st.markdown(f'<div class="{c5_class}"><div class="kpi-label">Est. NRR</div><div class="kpi-value">{f"{nrr_val:.0f}%" if nrr_val is not None else "N/A"}</div><div class="kpi-sub">{nrr_sub_kpi}</div></div>', unsafe_allow_html=True)
+    nrr_sub_kpi = "Rev compounding" if (nrr_val and nrr_val >= 120) else ("Above benchmark" if (nrr_val and nrr_val >= 106) else "proxy")
+    st.markdown(f'<div class="{c5_class}"><div class="kpi-label">Rev Retention*</div><div class="kpi-value">{f"{nrr_val:.0f}%" if nrr_val is not None else "N/A"}</div><div class="kpi-sub">{nrr_sub_kpi}</div></div>', unsafe_allow_html=True)
 with c6:
     moat_val = moat['moat_rating']
     c6_class = 'kpi signal-green' if moat_val >= 7 else ('kpi signal-purple' if moat_val >= 5 else 'kpi signal-red')
@@ -465,7 +540,10 @@ with c8:
     c8_class = 'kpi signal-green' if risk_level == 'Low' else ('kpi signal-amber' if risk_level == 'Medium' else 'kpi signal-red')
     st.markdown(f'<div class="{c8_class}"><div class="kpi-label">Risk Level</div><div class="kpi-value">{risk_level}</div></div>', unsafe_allow_html=True)
 
-st.markdown(f'<small><b>{name}</b> | {data["sector"]} | {data["industry"]} | {data.get("country", "")} | Currency: {currency} | Employees: {data.get("employees", "N/A"):,}</small>', unsafe_allow_html=True)
+emp = data.get("employees")
+emp_str = f"{emp:,}" if isinstance(emp, (int, float)) else "N/A"  # guard: many non-US tickers omit this
+st.markdown(f'<small><b>{name}</b> | {data["sector"]} | {data["industry"]} | {data.get("country", "")} | Currency: {currency} | Employees: {emp_str}</small>', unsafe_allow_html=True)
+st.caption("*Rev Retention is a proxy from the total-revenue trend (it includes new customers) — a ceiling on true cohort NRR, not actual NRR.")
 
 # ===========================================================================
 # NoB BUSINESS MODEL BANNER
@@ -575,7 +653,7 @@ with t1:
             'LTV:CAC ' + (f"{saas.get('ltv_cac_ratio')}:1" if saas.get('ltv_cac_ratio') is not None else 'N/A'),
             'CAC ' + (f"{saas.get('cac_payback_months'):.0f}mo" if saas.get('cac_payback_months') else 'N/A'),
             'GM ' + fmt_pct(gm_val),
-            'NRR ' + fmt_pct(nrr_val),
+            'Rev Ret ' + fmt_pct(nrr_val),
         ]
     elif nob_type == 'ai_infra_semiconductor':
         ind = quant.get('industrial_filter', {})
@@ -621,7 +699,7 @@ with t1:
         q_metrics = [
             'R40 ' + fmt_num(r40_val),
             'GM ' + fmt_pct(gm_val),
-            'NRR ' + fmt_pct(nrr_val),
+            'Rev Ret ' + fmt_pct(nrr_val),
         ]
 
     # Moat metrics
@@ -682,7 +760,7 @@ with t1:
         + f'Risk: <b>{risk_level}</b> ({risk_factors.get("risk_score", 0)})<br>'
         + f'Max: <b>{risk_max}% NAV</b><br>'
         + f'<span style="font-size:0.63rem; color:#888;">{position["action"]}</span><br>'
-        + f'<span style="font-size:0.63rem; color:#888;">Barbell: {barbell.get("message", "")}</span>'
+        + f'<span style="font-size:0.63rem; color:#888;">Stop: {risk_mgmt["mental_stop_loss"]["thesis_break_threshold"][:55]}</span>'
         + '</td>'
 
         + '</tr></tbody></table>'
@@ -705,6 +783,15 @@ with t1:
             '</div>',
             unsafe_allow_html=True
         )
+
+    # 1-year price chart — native st.line_chart (no plotly dependency)
+    pdata = data.get('price_data')
+    if pdata is not None and not pdata.empty and 'Close' in pdata.columns:
+        try:
+            st.markdown('<div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.08em;color:#94a3b8;font-weight:700;margin:10px 0 0 2px;">1-Year Price</div>', unsafe_allow_html=True)
+            st.line_chart(pdata['Close'].tail(252), height=170, color='#2563eb')
+        except Exception:
+            pass
 
 # ===== TAB 2: QUANTITATIVE QUADRANT =====
 with t2:
@@ -739,7 +826,7 @@ with t2:
             '<div class="kpi" style="border-left:5px solid ' + rpo_color + '; padding:16px 18px; min-height:220px;">'
             '<div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">'
             '<span style="font-size:1.4rem;">' + rpo_icon + '</span>'
-            '<span class="kpi-label" style="margin:0;">Remaining Performance Obligations</span>'
+            '<span class="kpi-label" style="margin:0;">Deferred Revenue (RPO proxy)</span>'
             '</div>'
             '<div style="display:flex; align-items:baseline; gap:10px; margin-bottom:6px;">'
             '<span class="kpi-value" style="color:' + rpo_color + ';">' + fmt_pct(rpo_growth) + '</span>'
@@ -752,7 +839,7 @@ with t2:
             '<span style="background:' + rpo_bg + '; color:' + rpo_color + '; padding:4px 12px; border-radius:14px; font-size:0.7rem; font-weight:700;">'
             + rpo_icon + ' ' + rpo_sig_str +
             '</span>'
-            '<div style="font-size:0.65rem; color:#999; margin-top:8px;">RPO &gt; Revenue = acceleration ahead</div>'
+            '<div style="font-size:0.65rem; color:#999; margin-top:8px;">Deferred rev &gt; revenue = possible acceleration</div>'
             '</div>',
             unsafe_allow_html=True
         )
@@ -766,21 +853,19 @@ with t2:
     elif nrr_growth is not None and nrr_growth >= 100: nrr_color = '#e65100'; nrr_bg = '#ffe0b2'; nrr_icon = ''
     else: nrr_color = '#c62828'; nrr_bg = '#ffcdd2'; nrr_icon = ''
     nrr_val = f'{nrr_growth:.0f}%' if nrr_growth is not None else 'N/A'
-    if nrr_growth is not None and nrr_growth >= 100:
-        nrr_impact = f'Grows {nrr_growth - 100:.0f}% with zero new customers'
-    else:
-        nrr_impact = 'Existing base is shrinking'
+    nrr_impact = nrr.get('installed_growth_note') or (
+        'Revenue compounding (proxy)' if (nrr_growth and nrr_growth >= 100) else 'Revenue base shrinking')
 
     with fi2:
         st.markdown(
             '<div class="kpi" style="border-left:5px solid ' + nrr_color + '; padding:16px 18px; min-height:220px;">'
             '<div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">'
             '<span style="font-size:1.4rem;">' + nrr_icon + '</span>'
-            '<span class="kpi-label" style="margin:0;">Net Retention Rate</span>'
+            '<span class="kpi-label" style="margin:0;">Rev Retention (proxy)</span>'
             '</div>'
             '<div style="display:flex; align-items:baseline; gap:10px; margin-bottom:6px;">'
             '<span class="kpi-value" style="color:' + nrr_color + ';">' + nrr_val + '</span>'
-            '<span style="font-size:0.7rem; color:#888; font-weight:600;">NRR</span>'
+            '<span style="font-size:0.7rem; color:#888; font-weight:600;">proxy</span>'
             '</div>'
             '<div style="margin-bottom:10px;">'
             '<span style="background:' + nrr_bg + '; color:' + nrr_color + '; padding:4px 12px; border-radius:14px; font-size:0.7rem; font-weight:700;">'
@@ -788,7 +873,7 @@ with t2:
             '</span>'
             '</div>'
             '<div style="font-size:0.68rem; color:#555; font-weight:600; line-height:1.4;">' + nrr_impact + '</div>'
-            '<div style="font-size:0.63rem; color:#999; margin-top:6px;">Benchmark &ge;106% | Installed growth &ge;120%</div>'
+            '<div style="font-size:0.63rem; color:#999; margin-top:6px;">Proxy from total revenue — a ceiling on true cohort NRR</div>'
             '</div>',
             unsafe_allow_html=True
         )
@@ -843,14 +928,16 @@ with t2:
 
         | Indicator | What It Reveals | Key Signal |
         |---|---|---|
-        | **RPO** (Remaining Performance Obligations) | Revenue already contracted but not yet recognized on the income statement | RPO growth > Revenue growth = revenue about to **accelerate** |
-        | **NRR** (Net Retention Rate) | Whether existing customers are expanding or shrinking — the 'installed growth' | NRR > 120% = business grows 20%+ even with **zero new customers** |
-        | **Forward Rule of 40** | What the Rule of 40 looks like using **next year's estimates** | Trailing < 40 but Forward ≥ 40 = **inflection point** to buy before the market notices |
+        | **Deferred Revenue** (partial RPO proxy) | Billed-but-unrecognized revenue on the balance sheet. *Excludes unbilled backlog*, so it understates true ASC 606 RPO. | Deferred-rev growth > revenue growth = possible acceleration ahead |
+        | **Rev Retention** (proxy, *not* true NRR) | Total-revenue trend YoY. It **includes new customers**, so it is a *ceiling* on real cohort retention — not "installed growth". | ≥120% = revenue compounding fast (but verify it isn't just new logos) |
+        | **Forward Rule of 40** | Forward FCF-margin view at a constant growth rate. The data source has no forward *revenue* estimate, so the signal is expected **margin expansion** (forward earnings vs revenue). | Forward ≥ 40 while trailing < 40 = margin-driven inflection |
 
         **How to use them together:**
-        - Strong RPO + High NRR + Forward R40 crossing 40 = the trifecta — maximum conviction
-        - Weak RPO + Low NRR + Forward R40 declining = thesis is breaking — consider exiting even if trailing numbers look OK
-        - Mixed signals = dig deeper into the specifics of the business model
+        - All three positive = a corroborating setup — but treat the retention/RPO figures as proxies and confirm against the filings.
+        - All three negative = thesis likely breaking — consider trimming even if trailing numbers still look fine.
+        - Mixed signals = dig into the business specifics before sizing up.
+
+        *These are proxies derived from Yahoo data, not the company's disclosed RPO/NRR. Verify headline metrics in the 10-K/10-Q before acting.*
         """)
 
     st.markdown("---")
@@ -868,7 +955,7 @@ with t2:
     core_rows = [
         '<tr><td>Rule of 40 (EBITDA)</td><td>' + (f'{r40_ebitda:.0f}' if r40_ebitda is not None else 'N/A') + '</td><td>Rule of 40 (FCF)</td><td>' + (f'{r40_fcf:.0f}' if r40_fcf is not None else 'N/A') + '</td></tr>',
         '<tr><td>Gross Margin</td><td>' + fmt_pct(gm_pct) + '</td><td>ARR Growth</td><td>' + fmt_pct(arr_growth) + '</td></tr>',
-        '<tr><td>Est. NRR</td><td>' + fmt_pct(nrr_pct) + '</td><td>Momentum</td><td>' + mom_rank + ' (' + f'{mom_score:+.0f}' + ')</td></tr>',
+        '<tr><td>Rev Ret* (proxy)</td><td>' + fmt_pct(nrr_pct) + '</td><td>Momentum</td><td>' + mom_rank + ' (' + f'{mom_score:+.0f}' + ')</td></tr>',
         '<tr><td colspan="4" style="font-size:0.65rem; color:#555;">' + r40_assess + ' | ' + mom_signals + '</td></tr>',
     ]
     core_table = (
@@ -1221,35 +1308,32 @@ with t5:
         for t, th in {'AAPL': 'Exit if iPhone unit growth turns negative 2 quarters', 'AMZN': 'Exit if AWS growth <14%', 'MSFT': 'Exit if Azure growth <28%', 'NVDA': 'Exit if data center growth <50%'}.items():
             st.markdown('<small><b>' + t + ':</b> ' + th + '</small>', unsafe_allow_html=True)
 
-    # Barbell + Portfolio compact
-    barbell = risk_mgmt['barbell_check']
-    segments = barbell.get('segments', {})
+    # Valuation snapshot (portfolio-level barbell needs a multi-holding view, which a
+    # single-ticker tool can't compute — the old barbell table was always empty here).
+    st.markdown("#### Valuation Snapshot")
     info = data['info']
     fwd_pe = info.get('forwardPE'); tpe = info.get('trailingPE')
     ps = info.get('priceToSales'); ev_ebitda = info.get('enterpriseToEbitda')
     fcf_val = info.get('freeCashflow'); mcap_val = info.get('marketCap')
     fcf_yield_val = (fcf_val / mcap_val * 100) if (fcf_val and mcap_val and mcap_val > 0) else None
 
-    barbell_portfolio_table = (
-        '<table style="width:100%; border-collapse:collapse; font-family:Inter,sans-serif; font-size:0.7rem; margin:6px 0;">'
-        '<colgroup><col style="width:18%"><col style="width:32%"><col style="width:18%"><col style="width:32%"></colgroup>'
+    val_cells = [
+        ('Forward P/E', f'{fwd_pe:.1f}x' if fwd_pe and fwd_pe > 0 else 'N/A'),
+        ('Trailing P/E', f'{tpe:.1f}x' if tpe and tpe > 0 else 'N/A'),
+        ('FCF Yield', f'{fcf_yield_val:.1f}%' if fcf_yield_val is not None else 'N/A'),
+        ('EV/EBITDA', f'{ev_ebitda:.1f}x' if ev_ebitda and ev_ebitda > 0 else 'N/A'),
+        ('P/S', f'{ps:.1f}x' if ps else 'N/A'),
+    ]
+    valuation_table = (
+        '<table style="width:100%; border-collapse:collapse; font-family:Inter,sans-serif; font-size:0.72rem; margin:6px 0;">'
         '<thead><tr style="border-bottom:2px solid #d0d5dc;">'
-        '<th style="padding:3px 8px; font-size:0.6rem; color:#888; text-transform:uppercase; letter-spacing:0.05em; text-align:left;">Barbell</th>'
-        '<th style="padding:3px 8px; font-size:0.6rem; color:#888; text-transform:uppercase; letter-spacing:0.05em; text-align:left;">Allocation</th>'
-        '<th style="padding:3px 8px; font-size:0.6rem; color:#888; text-transform:uppercase; letter-spacing:0.05em; text-align:left;">Valuation</th>'
-        '<th style="padding:3px 8px; font-size:0.6rem; color:#888; text-transform:uppercase; letter-spacing:0.05em; text-align:left;">Value</th>'
-        '</tr></thead><tbody>'
-        '<tr><td>High-Growth</td><td>' + str(segments.get('high_growth_pct', 0)) + '%</td>'
-        '<td>Forward P/E</td><td style="font-weight:600;">' + (f'{fwd_pe:.1f}x' if fwd_pe and fwd_pe > 0 else 'N/A') + '</td></tr>'
-        '<tr><td>Quality Value</td><td>' + str(segments.get('quality_value_pct', 0)) + '%</td>'
-        '<td>Trailing P/E</td><td style="font-weight:600;">' + (f'{tpe:.1f}x' if tpe and tpe > 0 else 'N/A') + '</td></tr>'
-        '<tr><td>Other</td><td>' + str(segments.get('other_pct', 0)) + '%</td>'
-        '<td>FCF Yield</td><td style="font-weight:600;">' + (f'{fcf_yield_val:.1f}%' if fcf_yield_val is not None else 'N/A') + '</td></tr>'
-        '<tr><td colspan="2" style="font-size:0.63rem; color:#555;">' + barbell.get('message', '') + '</td>'
-        '<td>P/S</td><td>' + (f'{ps:.1f}x' if ps else 'N/A') + '</td></tr>'
-        '</tbody></table>'
+        + ''.join('<th style="padding:4px 10px; font-size:0.6rem; color:#888; text-transform:uppercase; letter-spacing:0.05em; text-align:left;">' + h + '</th>' for h, _ in val_cells)
+        + '</tr></thead><tbody><tr>'
+        + ''.join('<td style="padding:4px 10px; font-weight:600;">' + v + '</td>' for _, v in val_cells)
+        + '</tr></tbody></table>'
     )
-    st.markdown(barbell_portfolio_table, unsafe_allow_html=True)
+    st.markdown(valuation_table, unsafe_allow_html=True)
+    st.caption("Portfolio-level barbell balance (growth vs value vs alternatives) needs your full holdings — a multi-position view is on the roadmap; a single-ticker tool can't compute it.")
 
 # ===== TAB 6: PORTFOLIO CONTEXT =====
 with t6:
@@ -1324,98 +1408,8 @@ with t7:
     st.markdown("#### Factor Attribution (SHAP-Style)")
     st.caption("Which factors drove the conviction assessment? Simplified feature importance for transparency.")
 
-    # Build attribution
-    factors = []
-    # Rule of 40 impact
-    r40_fcf = r40.get('rule_40_fcf')
-    if r40_fcf is not None:
-        if r40_fcf >= 50:
-            factors.append({'Factor': 'Rule of 40 (Elite)', 'Impact': '+2.5', 'Direction': 'Bullish', 'Detail': f'FCF Rule of 40 = {r40_fcf:.0f}'})
-        elif r40_fcf >= 40:
-            factors.append({'Factor': 'Rule of 40 (Strong)', 'Impact': '+1.5', 'Direction': 'Bullish', 'Detail': f'FCF Rule of 40 = {r40_fcf:.0f}'})
-        elif r40_fcf < 20:
-            factors.append({'Factor': 'Rule of 40 (Weak)', 'Impact': '-1.5', 'Direction': 'Bearish', 'Detail': f'FCF Rule of 40 = {r40_fcf:.0f}'})
-
-    # Gross margin impact
-    gm_pct = gm_data.get('gross_margin_pct')
-    if gm_pct is not None:
-        if gm_pct >= 75:
-            factors.append({'Factor': 'Gross Margin (Excellent)', 'Impact': '+1.5', 'Direction': 'Bullish', 'Detail': f'{gm_pct:.0f}% gross margin'})
-        elif gm_pct < 20:
-            factors.append({'Factor': 'Gross Margin (Thin)', 'Impact': '-1.5', 'Direction': 'Bearish', 'Detail': f'{gm_pct:.0f}% gross margin'})
-
-    # Moat impact
-    if moat_val >= 8:
-        factors.append({'Factor': 'Moat Rating (Wide)', 'Impact': '+2.0', 'Direction': 'Bullish', 'Detail': f'Moat = {moat_val}/10'})
-    elif moat_val >= 6:
-        factors.append({'Factor': 'Moat Rating (Moderate)', 'Impact': '+1.0', 'Direction': 'Bullish', 'Detail': f'Moat = {moat_val}/10'})
-    elif moat_val <= 3:
-        factors.append({'Factor': 'Moat Rating (None)', 'Impact': '-1.5', 'Direction': 'Bearish', 'Detail': f'Moat = {moat_val}/10'})
-
-    # Momentum
-    mom_rank = momentum.get('zacks_rank', 3)
-    if mom_rank == 1:
-        factors.append({'Factor': 'Momentum (Strong Buy)', 'Impact': '+1.5', 'Direction': 'Bullish', 'Detail': momentum.get('rank_label', '')})
-    elif mom_rank >= 4:
-        factors.append({'Factor': 'Momentum (Negative)', 'Impact': '-1.0', 'Direction': 'Bearish', 'Detail': momentum.get('rank_label', '')})
-
-    # Thematic fit
-    theme_score = thematic.get('primary_conviction', 0)
-    if theme_score >= 7:
-        factors.append({'Factor': 'Thematic Alignment (Strong)', 'Impact': '+1.5', 'Direction': 'Bullish', 'Detail': f'Primary: {thematic.get("primary_name", "")}'})
-    elif theme_score <= 2:
-        factors.append({'Factor': 'Thematic Alignment (Weak)', 'Impact': '-0.5', 'Direction': 'Bearish', 'Detail': 'No strong 2026 theme fit'})
-
-    # Risk factors
-    rs = risk_factors.get('risk_score', 0)
-    if rs >= 6:
-        factors.append({'Factor': 'Risk Profile (Elevated)', 'Impact': '-2.0', 'Direction': 'Bearish', 'Detail': f'Risk score = {rs}'})
-    elif rs <= 2:
-        factors.append({'Factor': 'Risk Profile (Clean)', 'Impact': '+1.0', 'Direction': 'Bullish', 'Detail': f'Risk score = {rs}'})
-
-    # NRR impact (enhanced with installed growth logic)
-    nrr_pct = nrr.get('estimated_nrr_pct')
-    if nrr_pct is not None:
-        if nrr_pct >= 120:
-            factors.append({'Factor': 'NRR — Installed Growth Engine', 'Impact': '+2.0', 'Direction': 'Bullish', 'Detail': f'NRR = {nrr_pct:.0f}% — grows {nrr_pct - 100:.0f}% even with zero new customers'})
-        elif nrr_pct >= 106:
-            factors.append({'Factor': 'NRR (Expanding)', 'Impact': '+1.0', 'Direction': 'Bullish', 'Detail': f'Est. NRR = {nrr_pct:.0f}%'})
-        elif nrr_pct < 100:
-            factors.append({'Factor': 'NRR (Contracting)', 'Impact': '-1.5', 'Direction': 'Bearish', 'Detail': f'Est. NRR = {nrr_pct:.0f}% — existing customer base is shrinking'})
-
-    # RPO impact
-    rpo_signal = rpo_data.get('leading_indicator_signal')
-    if rpo_signal == 'STRONG LEAD':
-        factors.append({'Factor': 'RPO — Revenue Acceleration Ahead', 'Impact': '+1.5', 'Direction': 'Bullish', 'Detail': rpo_data.get('signal_detail', 'Contracted backlog growing faster than revenue')})
-    elif rpo_signal == 'LAGGING':
-        factors.append({'Factor': 'RPO — Backlog Depleting', 'Impact': '-1.0', 'Direction': 'Bearish', 'Detail': rpo_data.get('signal_detail', 'RPO growth trailing revenue')})
-
-    # Forward Rule of 40 inflection
-    fwd_r40_val = fwd_r40.get('forward_rule_40')
-    fwd_inflection = fwd_r40.get('inflection_signal', '')
-    if fwd_inflection in ('MASSIVE INFLECTION', 'POSITIVE INFLECTION', 'BENCHMARK CROSSOVER'):
-        factors.append({'Factor': 'Forward Rule of 40 — Inflection Point', 'Impact': '+2.0', 'Direction': 'Bullish', 'Detail': fwd_r40.get('inflection_detail', 'Forward estimates show improvement')})
-    elif fwd_inflection in ('NEGATIVE INFLECTION', 'SEVERE DECLINE'):
-        factors.append({'Factor': 'Forward Rule of 40 — Deteriorating', 'Impact': '-1.5', 'Direction': 'Bearish', 'Detail': fwd_r40.get('inflection_detail', 'Forward estimates show decline')})
-
-    # Moat Performance attribution
-    perf_attr = qual.get('moat_performance', {})
-    perf_signal_attr = perf_attr.get('performance', '')
-    if perf_signal_attr == 'COMPOUNDING':
-        factors.append({'Factor': 'Moat Trajectory — Compounding', 'Impact': '+1.5', 'Direction': 'Bullish', 'Detail': 'Moat strengthening — declining CAC, rising premiums, expanding share'})
-    elif perf_signal_attr == 'DECAYING':
-        factors.append({'Factor': 'Moat Trajectory — Decaying', 'Impact': '-2.0', 'Direction': 'Bearish', 'Detail': 'Moat eroding — competitors closing gaps, pricing power weakening'})
-    elif perf_signal_attr == 'DEFENDING':
-        factors.append({'Factor': 'Moat Trajectory — Defending', 'Impact': '+0.5', 'Direction': 'Neutral', 'Detail': 'Moat stable — maintaining position without significant change'})
-
-    # Circumvention Delta
-    cd = moat.get('circumvention_delta', 0)
-    if cd >= 10:
-        factors.append({'Factor': 'Circumvention Delta (Formidable)', 'Impact': '+2.0', 'Direction': 'Bullish', 'Detail': f'Delta = {cd}/13 — {moat.get("circumvention_delta_formula", "")}'})
-    elif cd >= 7:
-        factors.append({'Factor': 'Circumvention Delta (Strong)', 'Impact': '+1.0', 'Direction': 'Bullish', 'Detail': f'Delta = {cd}/13'})
-    elif cd <= 3:
-        factors.append({'Factor': 'Circumvention Delta (Weak)', 'Impact': '-1.0', 'Direction': 'Bearish', 'Detail': f'Delta = {cd}/13 — low barrier to competition'})
+    # Build attribution — shared with the verdict hero (single source of truth)
+    factors = sorted(build_factor_attribution(result), key=lambda x: abs(x['ImpactNum']), reverse=True)
 
     if factors:
         for f in factors:
@@ -1447,7 +1441,7 @@ with t7:
 # ===== TAB 8: SCREENER =====
 with t8:
     st.markdown("### High Conviction Stock Screener")
-    st.caption("Screen 114 stocks across US, SGX, HKEX, and EU markets for Platinum, Gold, and Silver conviction tiers.")
+    st.caption("Screen a curated watchlist across US, SGX, HKEX, and EU markets for Platinum, Gold, and Silver conviction tiers.")
 
     # Watchlist
     WATCHLIST = [
@@ -1472,8 +1466,9 @@ with t8:
         # EU/Global
         'SAP','ASML','AZN','HSBC','BHP','RIO','BP','SHEL',
     ]
+    WATCHLIST = list(dict.fromkeys(WATCHLIST))  # de-duplicate
 
-    if st.button("Scan 114 Stocks", type="primary", use_container_width=True):
+    if st.button(f"Scan {len(WATCHLIST)} Stocks", type="primary", use_container_width=True):
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import time
 
@@ -1486,7 +1481,7 @@ with t8:
         total = len(WATCHLIST)
 
         with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = {executor.submit(alpha_analysis, t): t for t in WATCHLIST}
+            futures = {executor.submit(cached_analysis, t, 0, None): t for t in WATCHLIST}
             for i, future in enumerate(as_completed(futures)):
                 ticker_scan = futures[future]
                 res = future.result()
@@ -1521,20 +1516,12 @@ with t8:
 
         df = pd.DataFrame(results)
 
-        # ---- Tier filters ----
-        platinum = df[
-            (df['moat'] >= 6) & (df['risk'] <= 1) & (df['moat_trend'] == 'COMPOUNDING') &
-            ((df['nrr'].notna() & (df['nrr'] >= 120)) | (df['fwd_inflection'].isin(['MASSIVE INFLECTION', 'POSITIVE INFLECTION', 'BENCHMARK CROSSOVER'])))
-        ].sort_values('moat', ascending=False)
-
-        gold = df[
-            (df['moat'] >= 5) & (df['risk'] <= 2) &
-            ((df['nrr'].notna() & (df['nrr'] >= 120)) | (df['fwd_inflection'].isin(['MASSIVE INFLECTION', 'POSITIVE INFLECTION', 'BENCHMARK CROSSOVER'])))
-        ].sort_values('moat', ascending=False)
-
-        silver = df[
-            (df['moat'] >= 4) & (df['risk'] <= 4) & (df['circ_delta'] >= 4)
-        ].sort_values('moat', ascending=False)
+        # ---- Tier assignment (shared rubric — assign_screen_tier; one best tier per stock) ----
+        df['tier'] = df.apply(lambda r: assign_screen_tier(
+            r['moat'], r['risk'], r['moat_trend'], r['nrr'], r['fwd_inflection'], r['circ_delta']), axis=1)
+        platinum = df[df['tier'] == 'PLATINUM'].sort_values('moat', ascending=False)
+        gold = df[df['tier'] == 'GOLD'].sort_values('moat', ascending=False)
+        silver = df[df['tier'] == 'SILVER'].sort_values('moat', ascending=False)
 
         # ---- Display tiers ----
         def show_tier(subset, label, color, emoji):
@@ -1551,7 +1538,7 @@ with t8:
             display['moat'] = display['moat'].apply(lambda x: f"{x:.1f}")
             display['nrr'] = display['nrr'].apply(lambda x: f"{x:.0f}%" if pd.notna(x) else 'N/A')
             display['price'] = display['price'].apply(lambda x: f"${x:.2f}" if pd.notna(x) else 'N/A')
-            display.columns = ['Ticker','Name','NoB','Moat','Circ.D','Trend','Risk','NRR','Fwd Inflection','Price','Sector']
+            display.columns = ['Ticker','Name','NoB','Moat','Circ.D','Trend','Risk','Rev Ret*','Fwd Inflection','Price','Sector']
 
             st.dataframe(display, width='stretch', hide_index=True,
                 column_config={
@@ -1561,7 +1548,7 @@ with t8:
                     'Circ.D': st.column_config.TextColumn(width='small'),
                     'Trend': st.column_config.TextColumn(width='small'),
                     'Risk': st.column_config.TextColumn(width='small'),
-                    'NRR': st.column_config.TextColumn(width='small'),
+                    'Rev Ret*': st.column_config.TextColumn(width='small'),
                     'Fwd Inflection': st.column_config.TextColumn(width='medium'),
                     'Price': st.column_config.TextColumn(width='small'),
                 })
@@ -1592,7 +1579,7 @@ with t8:
             st.warning(f"{len(errors)} errors: {', '.join(e['ticker'] for e in errors[:5])}")
 
     else:
-        st.info("Click **Scan 114 Stocks** to screen US, Singapore, Hong Kong, and European markets. Multi-threaded analysis completes in approximately 30 seconds.")
+        st.info("Click **Scan** above to screen US, Singapore, Hong Kong, and European markets. Multi-threaded analysis completes in roughly 30 seconds (cached after the first run).")
         st.caption("The screener applies the full Analytical Alpha framework to each stock, then filters by moat strength, risk profile, and forward-looking growth signals.")
 
 st.caption(f"Not financial advice. Public data via Yahoo Finance. Analysis generated {datetime.now().strftime('%B&nbsp;%d,&nbsp;%Y at %H:%M')} — 2026 Strategic Growth Investment Framework")
