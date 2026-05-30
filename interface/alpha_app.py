@@ -615,7 +615,15 @@ if not ticker:
     # ===========================================================================
     st.markdown("---")
     st.markdown("### 📁 Your Portfolio")
-    st.caption("Analyse the whole book — barbell balance, concentration vs caps, business-model & region exposure. Your file stays in this browser session and is never saved to the server.")
+    st.caption("Analyse the whole book — barbell balance, concentration vs caps, business-model & region exposure. Uploaded files stay in this browser session; a saved portfolio (if configured) is read from your private Streamlit secrets, never the repo.")
+
+    # One-click persistence: a portfolio stored in Streamlit secrets (private, not in the repo)
+    saved_positions = None
+    try:
+        _payload = json.loads(st.secrets["portfolio_json"])
+        saved_positions = _payload.get('positions') if isinstance(_payload, dict) else _payload
+    except Exception:
+        saved_positions = None
 
     up_col, ccy_col = st.columns([0.62, 0.38])
     with up_col:
@@ -624,6 +632,9 @@ if not ticker:
             type=['json'])
     with ccy_col:
         base_ccy = st.selectbox("Base currency", ['USD', 'SGD', 'HKD', 'EUR', 'GBP'], index=0)
+        if saved_positions:
+            if st.button(f"📂 Load my saved portfolio ({len(saved_positions)})", type="primary", use_container_width=True):
+                st.session_state['portfolio'] = saved_positions
         if st.button("Try the example portfolio", use_container_width=True):
             try:
                 with open(os.path.join(os.path.dirname(__file__), '..', 'data', 'holdings.example.json')) as fh:
@@ -646,7 +657,8 @@ if not ticker:
         st.caption(f"{len(positions)} positions loaded · base currency {base_ccy}")
         render_portfolio(positions, base_ccy)
     else:
-        st.info("No portfolio loaded yet — upload a `portfolio.json` (same schema as your dashboard) or click **Try the example portfolio**.")
+        _saved_hint = "click **Load my saved portfolio**, " if saved_positions else ""
+        st.info(f"No portfolio loaded yet — {_saved_hint}upload a `portfolio.json` (same schema as your dashboard), or click **Try the example portfolio**.")
 
     st.stop()
 
