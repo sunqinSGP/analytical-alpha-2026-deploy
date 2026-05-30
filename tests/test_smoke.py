@@ -15,6 +15,7 @@ from stock_analyzer.alpha_engine import (
     net_revenue_retention_estimate, NoB_TYPES,
 )
 from stock_analyzer.verdict import build_factor_attribution, recommendation_for
+from stock_analyzer import portfolio as pf
 
 PASS, FAIL = 0, 0
 
@@ -170,6 +171,30 @@ weak = make_data(info={'longBusinessSummary': 'Sells generic goods.', 'returnOnE
                        'sector': 'Consumer Defensive', 'industry': 'Grocery Stores'})
 wmoat = alpha_analysis('WEAK', data=weak)['qualitative']['moat']
 check("weak commodity stays low moat (rating < 5)", wmoat['moat_rating'] < 5)
+
+print("\n[9] Portfolio math (weights, FX, P&L, barbell, concentration)")
+prows = [
+    {'ticker': 'A', 'shares': 10, 'cost_basis': 100, 'currency': 'USD', 'layer': 'Growth',
+     'nob': 'SaaS', 'region': 'US', 'price': 150, 'cap': 10},                         # mv 1500 USD
+    {'ticker': 'B', 'shares': 100, 'cost_basis': 10, 'currency': 'HKD', 'layer': 'Income',
+     'nob': 'Value', 'region': 'HK', 'price': 12, 'cap': 7},                          # 1200 HKD
+    {'ticker': 'C', 'shares': 5, 'cost_basis': 1000, 'currency': 'JPY', 'layer': 'Growth',
+     'nob': 'Semis', 'region': 'JP', 'price': 1100, 'cap': 7},                        # FX missing
+]
+fx = {'HKD': 0.128}  # ~7.8 HKD/USD; JPY intentionally absent
+enr, tot = pf.enrich(prows, fx, 'USD')
+wsum = sum(r['weight_pct'] for r in enr)
+check("weights of priced positions sum to ~100", abs(wsum - 100) < 0.5)
+check("A (1500) outweighs B (~154)", enr[0]['weight_pct'] > enr[1]['weight_pct'])
+check("P&L% is currency-agnostic (A = +50%)", abs(enr[0]['pnl_pct'] - 50) < 1e-6)
+check("missing FX flagged, not silently mis-weighted", tot['fx_missing'] == ['C'] and enr[2]['weight_pct'] == 0.0)
+check("portfolio P&L aggregates (~46.6%)", tot['total_pnl_pct'] is not None and abs(tot['total_pnl_pct'] - 46.6) < 1.0)
+bb = pf.barbell_breakdown(enr)
+check("barbell uses the user's layers", set(bb) == {'Growth', 'Income'} and bb['Growth'] > bb['Income'])
+oc = pf.over_cap(enr)
+check("over-cap flags the concentrated name", any(o['ticker'] == 'A' for o in oc))
+reg = pf.group_weights(enr, 'region')
+check("region exposure groups correctly", abs(reg.get('US', 0) - enr[0]['weight_pct']) < 1e-6)
 
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 sys.exit(1 if FAIL else 0)

@@ -1,0 +1,11 @@
+{
+  "_comment": "EXAMPLE template only — fake holdings. Upload your own portfolio.json in the app; it is used in-memory and never written to this public repo.",
+  "positions": [
+    {"ticker": "MSFT", "shares": 40, "region": "US", "layer": "growth", "name": "Microsoft", "currency": "USD", "cost_basis": 300.0, "notes": ""},
+    {"ticker": "NVDA", "shares": 60, "region": "US", "layer": "growth", "name": "NVIDIA", "currency": "USD", "cost_basis": 110.0, "notes": ""},
+    {"ticker": "JNJ", "shares": 50, "region": "US", "layer": "income", "name": "Johnson & Johnson", "currency": "USD", "cost_basis": 160.0, "notes": ""},
+    {"ticker": "O39.SI", "shares": 2000, "region": "SG", "layer": "income", "name": "OCBC Bank", "currency": "SGD", "cost_basis": 12.5, "notes": ""},
+    {"ticker": "0823.HK", "shares": 1500, "region": "HK", "layer": "income", "name": "Link REIT", "currency": "HKD", "cost_basis": 40.0, "notes": ""},
+    {"ticker": "0700.HK", "shares": 300, "region": "HK", "layer": "growth", "name": "Tencent", "currency": "HKD", "cost_basis": 360.0, "notes": ""}
+  ]
+}

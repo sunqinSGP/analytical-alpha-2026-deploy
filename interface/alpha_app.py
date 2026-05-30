@@ -9,6 +9,7 @@ import numpy as np
 from datetime import datetime
 import sys
 import os
+import json
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from stock_analyzer.alpha_engine import (
@@ -16,6 +17,7 @@ from stock_analyzer.alpha_engine import (
     THEMES_2026, NoB_TYPES,
 )
 from stock_analyzer.verdict import CONV_COLORS, build_factor_attribution, recommendation_for
+from stock_analyzer import portfolio as pf
 
 # Page config
 st.set_page_config(
@@ -40,6 +42,23 @@ def cached_fetch(tkr):
 def cached_analysis(tkr, weight_pct, framework):
     data = cached_fetch(tkr)
     return alpha_analysis(tkr, current_weight_pct=weight_pct, framework=framework, data=data)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_fx(from_ccy, to_ccy):
+    """Spot FX rate from_ccy -> to_ccy via Yahoo (e.g. HKDUSD=X). None if unavailable."""
+    if from_ccy == to_ccy:
+        return 1.0
+    import yfinance as yf
+    try:
+        h = yf.Ticker(f"{from_ccy}{to_ccy}=X").history(period='5d')
+        if h is not None and not h.empty:
+            s = h['Close'].dropna()
+            if len(s):
+                return float(s.iloc[-1])
+    except Exception:
+        pass
+    return None
 
 # StockOracle-inspired CSS — clean, professional, color-coded health signals
 st.markdown("""
@@ -344,6 +363,139 @@ def render_verdict_hero(result, current_weight=0):
     ''', unsafe_allow_html=True)
 
 
+def _fmt_money(v, sym):
+    if v is None:
+        return 'N/A'
+    if abs(v) >= 1e9:
+        return f"{sym}{v/1e9:.2f}B"
+    if abs(v) >= 1e6:
+        return f"{sym}{v/1e6:.2f}M"
+    return f"{sym}{v:,.0f}"
+
+
+def render_portfolio(positions, base_ccy):
+    """Whole-portfolio dashboard from an uploaded holdings list. Fetches live prices +
+    analysis (cached/threaded), converts to a base currency, and shows weights, P&L,
+    barbell (from the user's own `layer`), concentration vs caps, and exposure mixes."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    sym = CURRENCY_SYMBOLS.get(base_ccy, '$')
+    valid = [p for p in positions if p.get('ticker')]
+    if not valid:
+        st.warning("No tickers found in the uploaded file.")
+        return
+
+    prog, status = st.progress(0.0), st.empty()
+    rows, failed = [], []
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {ex.submit(cached_analysis, p['ticker'], 0, None): p for p in valid}
+        done = 0
+        for fut in as_completed(futs):
+            p = futs[fut]
+            done += 1
+            prog.progress(done / len(futs))
+            status.text(f"Analysing {done}/{len(futs)}: {p['ticker']}")
+            try:
+                res = fut.result()
+                if 'error' in res:
+                    failed.append(p['ticker'])
+                    continue
+                rows.append({
+                    'ticker': p['ticker'],
+                    'name': p.get('name') or res['data']['name'],
+                    'shares': p.get('shares'), 'cost_basis': p.get('cost_basis'),
+                    'currency': p.get('currency') or detect_currency(p['ticker']),
+                    'region': p.get('region') or '—',
+                    'layer': (p.get('layer') or 'unclassified').title(),
+                    'price': res['data']['price'],
+                    'nob': res['nob']['name'],
+                    'theme': res['thematic'].get('primary_name') or '—',
+                    'moat': res['qualitative']['moat']['moat_rating'],
+                    'risk': res['risk_management']['risk_factors']['risk_level'],
+                    'conviction': res['thesis']['conviction'],
+                    'cap': res['risk_management']['risk_factors'].get('max_suggested_position'),
+                })
+            except Exception:
+                failed.append(p.get('ticker'))
+    prog.empty()
+    status.empty()
+    if not rows:
+        st.error("Could not analyse any positions — check the tickers or try again.")
+        return
+
+    fx = {c: cached_fx(c, base_ccy) for c in {r['currency'] for r in rows}}
+    enriched, totals = pf.enrich(rows, fx, base_ccy)
+    over = pf.over_cap(enriched)
+    top = pf.top_positions(enriched, 1)
+    top_w = top[0]['weight_pct'] if top else 0.0
+    pnl = totals.get('total_pnl_pct')
+
+    # ---- Summary KPIs ----
+    k = st.columns(5)
+    k[0].markdown(f'<div class="kpi"><div class="kpi-label">Portfolio Value</div><div class="kpi-value">{_fmt_money(totals["total_market_value_base"], sym)}</div><div class="kpi-sub">{base_ccy}</div></div>', unsafe_allow_html=True)
+    k[1].markdown(f'<div class="kpi"><div class="kpi-label">Positions</div><div class="kpi-value">{totals["n_positions"]}</div></div>', unsafe_allow_html=True)
+    pnl_cls = 'kpi signal-green' if (pnl or 0) >= 0 else 'kpi signal-red'
+    k[2].markdown(f'<div class="{pnl_cls}"><div class="kpi-label">Unrealized P&L</div><div class="kpi-value">{f"{pnl:+.1f}%" if pnl is not None else "N/A"}</div></div>', unsafe_allow_html=True)
+    tw_cls = 'kpi signal-red' if top_w > 10 else ('kpi signal-amber' if top_w > 7 else 'kpi signal-green')
+    k[3].markdown(f'<div class="{tw_cls}"><div class="kpi-label">Top Position</div><div class="kpi-value">{top_w:.1f}%</div><div class="kpi-sub">{top[0]["ticker"] if top else ""}</div></div>', unsafe_allow_html=True)
+    oc_cls = 'kpi signal-red' if over else 'kpi signal-green'
+    k[4].markdown(f'<div class="{oc_cls}"><div class="kpi-label">Over Cap</div><div class="kpi-value">{len(over)}</div></div>', unsafe_allow_html=True)
+
+    if failed:
+        st.caption(f"Skipped (no data): {', '.join(str(x) for x in failed)}")
+    if totals.get('fx_missing'):
+        st.caption(f"FX unavailable for {', '.join(totals['fx_missing'])} — excluded from totals/weights.")
+
+    # ---- Barbell + business-model mix ----
+    cA, cB = st.columns(2)
+    with cA:
+        st.markdown("#### Barbell — your income/growth layers")
+        barbell = pf.barbell_breakdown(enriched)
+        st.bar_chart(pd.DataFrame({'Weight %': barbell}), height=200)
+    with cB:
+        st.markdown("#### Business-model mix")
+        st.bar_chart(pd.DataFrame({'Weight %': pf.group_weights(enriched, 'nob')}), height=200)
+
+    cC, cD = st.columns(2)
+    with cC:
+        regmix = pf.group_weights(enriched, 'region')
+        st.markdown("#### Region exposure")
+        st.caption(" · ".join(f"**{kk}** {vv:.0f}%" for kk, vv in regmix.items()))
+    with cD:
+        convmix = pf.group_weights(enriched, 'conviction')
+        st.markdown("#### Conviction exposure")
+        st.caption(" · ".join(f"**{kk.split()[0].title()}** {vv:.0f}%" for kk, vv in convmix.items()))
+
+    # ---- Concentration vs risk cap ----
+    st.markdown("#### Concentration vs risk-based cap")
+    if over:
+        st.warning("Above their risk-based NAV cap — consider trimming:")
+        odf = pd.DataFrame(over)[['ticker', 'name', 'weight_pct', 'cap', 'excess_pct']]
+        odf.columns = ['Ticker', 'Name', 'Weight %', 'Cap %', 'Excess %']
+        st.dataframe(odf, hide_index=True, width='stretch')
+    else:
+        st.success("All positions are within their risk-based caps.")
+
+    # ---- Holdings table ----
+    st.markdown("#### Holdings")
+    disp = pd.DataFrame(enriched)
+    disp['Value'] = disp['market_value_base'].apply(lambda v: _fmt_money(v, sym))
+    disp['Weight'] = disp['weight_pct'].apply(lambda v: f"{v:.1f}%")
+    disp['P&L'] = disp['pnl_pct'].apply(lambda v: f"{v:+.1f}%" if pd.notna(v) else 'N/A')
+    disp['Moat'] = disp['moat'].apply(lambda v: f"{v:.1f}")
+    show = disp[['ticker', 'name', 'layer', 'region', 'Value', 'Weight', 'P&L', 'nob', 'Moat', 'risk', 'conviction']].copy()
+    show.columns = ['Ticker', 'Name', 'Layer', 'Region', 'Value', 'Weight', 'P&L', 'Business Model', 'Moat', 'Risk', 'Conviction']
+    show = show.sort_values('Weight', ascending=False, key=lambda s: s.str.rstrip('%').astype(float))
+    st.dataframe(show, hide_index=True, width='stretch')
+
+    out = json.dumps({'base_currency': base_ccy, 'positions': [
+        {kk: r.get(kk) for kk in ['ticker', 'name', 'shares', 'cost_basis', 'currency',
+                                   'region', 'layer', 'price', 'weight_pct', 'pnl_pct',
+                                   'nob', 'moat', 'risk', 'conviction']}
+        for r in enriched]}, indent=2, default=str)
+    st.download_button("Download analysed holdings (JSON)", out,
+                       file_name="holdings_analysed.json", mime="application/json")
+
+
 # ===========================================================================
 # HEADER
 # ===========================================================================
@@ -456,7 +608,46 @@ if not ticker:
             """, unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
-    st.info("Enter a ticker above to begin. Try **QLYS** (High-Growth SaaS), **3323.HK** (Traditional Value), **NVDA** (AI Infra), or **BE** (Energy). Use the Framework dropdown to override auto-detection.")
+    st.info("Enter a ticker above for a single-stock deep dive (try **QLYS**, **NVDA**, **3323.HK**, **BE**) — or load your whole portfolio below.")
+
+    # ===========================================================================
+    # PORTFOLIO VIEW — analyse your whole book without entering a ticker
+    # ===========================================================================
+    st.markdown("---")
+    st.markdown("### 📁 Your Portfolio")
+    st.caption("Analyse the whole book — barbell balance, concentration vs caps, business-model & region exposure. Your file stays in this browser session and is never saved to the server.")
+
+    up_col, ccy_col = st.columns([0.62, 0.38])
+    with up_col:
+        up = st.file_uploader(
+            "Holdings JSON — positions: ticker, shares, cost_basis, currency, region, layer",
+            type=['json'])
+    with ccy_col:
+        base_ccy = st.selectbox("Base currency", ['USD', 'SGD', 'HKD', 'EUR', 'GBP'], index=0)
+        if st.button("Try the example portfolio", use_container_width=True):
+            try:
+                with open(os.path.join(os.path.dirname(__file__), '..', 'data', 'holdings.example.json')) as fh:
+                    st.session_state['portfolio'] = json.load(fh).get('positions', [])
+            except Exception as e:
+                st.error(f"Example unavailable: {e}")
+
+    if up is not None:
+        try:
+            payload = json.load(up)
+            positions = payload.get('positions') if isinstance(payload, dict) else payload
+            if not isinstance(positions, list):
+                raise ValueError("expected a 'positions' list (or a top-level list)")
+            st.session_state['portfolio'] = positions
+        except Exception as e:
+            st.error(f"Couldn't read that file: {e}")
+
+    positions = st.session_state.get('portfolio')
+    if positions:
+        st.caption(f"{len(positions)} positions loaded · base currency {base_ccy}")
+        render_portfolio(positions, base_ccy)
+    else:
+        st.info("No portfolio loaded yet — upload a `portfolio.json` (same schema as your dashboard) or click **Try the example portfolio**.")
+
     st.stop()
 
 
