@@ -177,8 +177,11 @@ input, select, textarea, .stTextInput>div>div>input{
 input:focus-visible{ border-color:var(--accent) !important; box-shadow:0 0 0 3px rgba(37,99,235,0.12) !important; }
 .stButton>button{ border-radius:9px !important; font-weight:600 !important; font-size:0.86rem !important;
   border:1px solid var(--line) !important; }
-.stButton>button[kind="primary"]{ background:var(--ink) !important; border-color:var(--ink) !important; color:#fff !important; }
+.stButton>button[kind="primary"]{ background:var(--ink) !important; border-color:var(--ink) !important; font-weight:700 !important; }
+/* force white label on the dark primary button, incl. the nested <p> (global p-color was bleeding in) */
+.stButton>button[kind="primary"], .stButton>button[kind="primary"] *{ color:#ffffff !important; }
 .stButton>button[kind="primary"]:hover{ background:#1e293b !important; }
+.stButton>button[kind="primary"]:hover *{ color:#ffffff !important; }
 
 /* Dataframe */
 [data-testid="stDataFrame"]{ border:1px solid var(--line); border-radius:12px; }
