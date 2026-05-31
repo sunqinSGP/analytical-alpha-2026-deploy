@@ -802,17 +802,33 @@ def render_ai_chat(chatkey, system_text, placeholder, starters, suffix):
 
 
 def _market_context():
-    """Compact live snapshot to ground the landing chat: latest scan, oversold sectors, headlines."""
+    """Compact live snapshot to ground the landing chat: the high-conviction stock screen, oversold
+    sectors, and headlines. Labelled clearly so the model uses real names for stock-picking asks."""
     bits = []
     saved = _load_saved_screen()
+    rows = (saved or {}).get('results') or []
+    if rows:
+        conv_rank = {'HIGH CONVICTION': 0, 'MODERATE CONVICTION': 1, 'SELECTIVE': 2,
+                     'OPPORTUNISTIC': 3, 'PASS': 4}
+        # Surface the genuinely high-conviction names (tier is stored UPPER-case; match either the
+        # conviction label or a Platinum/Gold tier), highest conviction then widest moat first.
+        tops = [r for r in rows
+                if r.get('conviction') in ('HIGH CONVICTION', 'MODERATE CONVICTION')
+                or str(r.get('tier', '')).upper() in ('PLATINUM', 'GOLD')]
+        tops.sort(key=lambda r: (conv_rank.get(r.get('conviction'), 9), -(r.get('moat') or 0)))
+        bits.append(
+            f"The app's latest high-conviction STOCK screen ({saved.get('generated_human', '?')}, "
+            f"{saved.get('analysed', 0)} names analysed). These ARE the app's high-conviction names — "
+            "use them, highest-conviction first, when the user asks for stock ideas. "
+            "Format = ticker · sector · conviction · tier · moat/10:")
+        for r in tops[:24]:
+            bits.append(f"  {r.get('ticker')} · {r.get('sector', '')} · {r.get('conviction', '')} · "
+                        f"{r.get('tier', '')} · moat {r.get('moat', '?')}")
+    else:
+        bits.append("No saved stock screen is available yet (the nightly screener hasn't run). For "
+                    "stock-specific questions, answer from general knowledge and say it isn't from a "
+                    "live screen.")
     if saved:
-        bits.append(f"Latest internal scan: {saved.get('generated_human', '?')} — "
-                    f"{saved.get('analysed', 0)} names analysed.")
-        tops = [r for r in (saved.get('results') or []) if r.get('tier') in ('Platinum', 'Gold')][:18]
-        if tops:
-            bits.append("Top-tier screened names (ticker · sector · conviction): " +
-                        "; ".join(f"{r.get('ticker')} · {r.get('sector', '')} · {r.get('conviction', '')}"
-                                  for r in tops))
         ranked = sct.rank_oversold(saved.get('sectors') or {}, top=12)
         if ranked:
             bits.append("Most oversold sectors / industries now (name · RSI · % off 52w high · 1m return): " +
