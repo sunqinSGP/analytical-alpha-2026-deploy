@@ -175,13 +175,21 @@ small{ color:var(--muted); }
 input, select, textarea, .stTextInput>div>div>input{
   border-radius:9px !important; border:1px solid #cbd5e1 !important; font-size:0.9rem !important; }
 input:focus-visible{ border-color:var(--accent) !important; box-shadow:0 0 0 3px rgba(37,99,235,0.12) !important; }
-.stButton>button{ border-radius:9px !important; font-weight:600 !important; font-size:0.86rem !important;
-  border:1px solid var(--line) !important; }
+/* base / secondary buttons: explicit white bg + dark text so they never inherit a dark
+   theme default (the global p-colour and Streamlit's base theme were bleeding in) */
+.stButton>button, .stDownloadButton>button, [data-testid="stFormSubmitButton"]>button{
+  border-radius:9px !important; font-weight:600 !important; font-size:0.86rem !important;
+  border:1px solid var(--line) !important; background:var(--surface) !important; color:var(--ink) !important; }
+.stButton>button *, .stDownloadButton>button *, [data-testid="stFormSubmitButton"]>button *{ color:var(--ink) !important; }
+.stButton>button:hover, .stDownloadButton>button:hover, [data-testid="stFormSubmitButton"]>button:hover{
+  background:var(--accent-soft) !important; border-color:var(--accent-line) !important; }
+.stButton>button:hover, .stButton>button:hover *,
+.stDownloadButton>button:hover, .stDownloadButton>button:hover *{ color:var(--accent) !important; }
+/* primary button: dark bg + white text — declared last so it wins over the base rules */
 .stButton>button[kind="primary"]{ background:var(--ink) !important; border-color:var(--ink) !important; font-weight:700 !important; }
-/* force white label on the dark primary button, incl. the nested <p> (global p-color was bleeding in) */
 .stButton>button[kind="primary"], .stButton>button[kind="primary"] *{ color:#ffffff !important; }
-.stButton>button[kind="primary"]:hover{ background:#1e293b !important; }
-.stButton>button[kind="primary"]:hover *{ color:#ffffff !important; }
+.stButton>button[kind="primary"]:hover{ background:#1e293b !important; border-color:#1e293b !important; }
+.stButton>button[kind="primary"]:hover, .stButton>button[kind="primary"]:hover *{ color:#ffffff !important; }
 
 /* Dataframe */
 [data-testid="stDataFrame"]{ border:1px solid var(--line); border-radius:12px; }
