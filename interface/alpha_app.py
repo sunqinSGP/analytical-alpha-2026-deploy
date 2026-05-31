@@ -229,6 +229,16 @@ table.clean th{ text-align:left; font-size:0.72rem; font-weight:700; text-transf
 table.clean td{ padding:8px 10px; border-bottom:1px solid #f1f5f9; color:var(--slate); vertical-align:top; }
 table.clean td b{ color:var(--ink); font-weight:600; }
 
+/* Markdown tables (AI chat answers, etc.) — force readable dark-on-light cells so they don't
+   inherit Streamlit's theme text colour (white under OS dark mode = invisible). */
+[data-testid="stMarkdownContainer"] table{ border-collapse:collapse; width:100%; margin:8px 0;
+  font-size:0.86rem; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+[data-testid="stMarkdownContainer"] th, [data-testid="stMarkdownContainer"] td{
+  color:var(--ink) !important; border:1px solid var(--line) !important; padding:7px 11px !important;
+  text-align:left; background:var(--surface) !important; }
+[data-testid="stMarkdownContainer"] th{ background:#eef1f5 !important; font-weight:700 !important; }
+[data-testid="stMarkdownContainer"] td *, [data-testid="stMarkdownContainer"] th *{ color:var(--ink) !important; }
+
 @media (prefers-reduced-motion: reduce){ *{ transition:none !important; } }
 </style>
 """, unsafe_allow_html=True)
