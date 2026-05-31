@@ -5,8 +5,8 @@ Rendering (HTML/Streamlit) lives in the UI; only the data lives here.
 """
 
 CONV_COLORS = {
-    'HIGH CONVICTION': '#059669', 'MODERATE CONVICTION': '#2563eb',
-    'SELECTIVE': '#ea580c', 'OPPORTUNISTIC': '#ca8a04', 'PASS': '#dc2626',
+    'HIGH CONVICTION': '#047857', 'MODERATE CONVICTION': '#2563eb',
+    'SELECTIVE': '#c2410c', 'OPPORTUNISTIC': '#a16207', 'PASS': '#b91c1c',
 }
 
 BULLISH_INFLECTIONS = ('POSITIVE INFLECTION', 'BENCHMARK CROSSOVER', 'MASSIVE INFLECTION')
@@ -89,13 +89,13 @@ def recommendation_for(conviction, max_pos, current_weight):
     """Map conviction + risk-based cap + current weight to a plain-English action.
     Returns (action, color, sub_text)."""
     table = {
-        'HIGH CONVICTION': ('ACCUMULATE', '#059669', f'Core position — build toward {max_pos}% NAV'),
+        'HIGH CONVICTION': ('ACCUMULATE', '#047857', f'Core position — build toward {max_pos}% NAV'),
         'MODERATE CONVICTION': ('BUY / HOLD', '#2563eb', f'Moderate position, up to {max_pos}% NAV'),
-        'SELECTIVE': ('SELECTIVE', '#ea580c', f'Small position only ({max_pos}% NAV cap) — tighten stops'),
-        'OPPORTUNISTIC': ('TRADE', '#ca8a04', "Tactical only — trade, don't marry"),
-        'PASS': ('AVOID', '#dc2626', 'Better opportunities elsewhere'),
+        'SELECTIVE': ('SELECTIVE', '#c2410c', f'Small position only ({max_pos}% NAV cap) — tighten stops'),
+        'OPPORTUNISTIC': ('TRADE', '#a16207', "Tactical only — trade, don't marry"),
+        'PASS': ('AVOID', '#b91c1c', 'Better opportunities elsewhere'),
     }
-    action, color, sub = table.get(conviction, ('REVIEW', '#6b7280', ''))
+    action, color, sub = table.get(conviction, ('REVIEW', '#566173', ''))
     if current_weight and current_weight > max_pos:
-        return 'TRIM', '#dc2626', f'Position {current_weight:.1f}% exceeds the {max_pos}% cap — reduce'
+        return 'TRIM', '#b91c1c', f'Position {current_weight:.1f}% exceeds the {max_pos}% cap — reduce'
     return action, color, sub

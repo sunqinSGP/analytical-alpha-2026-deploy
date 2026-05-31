@@ -95,10 +95,10 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 :root{
-  --ink:#0f172a; --slate:#39455a; --muted:#4f5d73; --faint:#69768c;
+  --ink:#0f172a; --slate:#39455a; --muted:#4f5d73; --faint:#586377;
   --line:#e7eaee; --bg:#f7f8fa; --surface:#ffffff;
   --accent:#2563eb; --accent-soft:#eff6ff; --accent-line:#bfdbfe;
-  --pos:#16a34a; --neg:#dc2626; --amber:#b45309;
+  --pos:#15803d; --neg:#b91c1c; --amber:#b45309;
 }
 * { box-sizing:border-box; }
 html, body, [class*="css"]{

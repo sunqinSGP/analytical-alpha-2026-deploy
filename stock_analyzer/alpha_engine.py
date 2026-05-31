@@ -1388,16 +1388,16 @@ def moat_analysis(info, gm=None, data=None):
 
     if moat_score >= 8:
         moat_label = "Wide Moat — Exceptional Resilience"
-        moat_color = "#16a34a"
+        moat_color = "#15803d"
     elif moat_score >= 6:
         moat_label = "Moderate Moat — Defensible Position"
-        moat_color = "#ea580c"
+        moat_color = "#c2410c"
     elif moat_score >= 4:
         moat_label = "Narrow Moat — Some Protection"
-        moat_color = "#ca8a04"
+        moat_color = "#a16207"
     else:
         moat_label = "No Moat — Vulnerable to Competition"
-        moat_color = "#dc2626"
+        moat_color = "#b91c1c"
 
     return {
         'temporal_width': {'score': temporal_score, 'rating': temporal_rating, 'signals': temporal_signals},
@@ -1506,15 +1506,15 @@ def moat_performance_signals(info, data):
     elif score >= 3:
         performance = "COMPOUNDING"
         performance_label = "Strengthening — expanding margins, strong growth, healthy returns on capital"
-        performance_color = "#16a34a"
+        performance_color = "#15803d"
     elif score <= -2:
         performance = "DECAYING"
         performance_label = "Eroding — compressing margins, weak growth, or deteriorating returns"
-        performance_color = "#dc2626"
+        performance_color = "#b91c1c"
     else:
         performance = "DEFENDING"
         performance_label = "Stable — steady margins and growth, no material erosion or expansion"
-        performance_color = "#ea580c"
+        performance_color = "#c2410c"
         if not compound_signals and not decay_signals:
             defend_signals.append("Metrics steady — no strong trajectory either way")
 
