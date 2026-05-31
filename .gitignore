@@ -4,3 +4,5 @@ __pycache__/
 .streamlit/
 *.local.toml
 *.local.json
+data/screen_results.json
+data/screen_log.txt

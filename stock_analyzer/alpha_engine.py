@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 import math
 import time
+import threading
 
 # ---------------------------------------------------------------------------
 # Core utilities
@@ -54,13 +55,21 @@ def format_market_cap(mcap, symbol='$'):
     return f"{symbol}{mcap:,.0f}"
 
 
+_session_tls = threading.local()
+
+
 def _yf_ticker(ticker):
-    """yfinance Ticker using a browser-impersonating curl_cffi session when available.
-    This is what stops Yahoo Finance from rate-limiting shared / cloud IPs (the exact
-    failure that made valid tickers like QLYS report 'could not fetch' on Streamlit Cloud)."""
+    """yfinance Ticker using a browser-impersonating curl_cffi session, reused PER THREAD.
+    One session (one Yahoo 'crumb') per thread instead of a fresh session per call — this
+    avoids the 'Invalid Crumb' 401 storm when bulk-screening many tickers, while still
+    impersonating a browser to dodge IP rate-limiting on shared/cloud IPs."""
     try:
         from curl_cffi import requests as _creq
-        return yf.Ticker(ticker, session=_creq.Session(impersonate="chrome"))
+        sess = getattr(_session_tls, 'session', None)
+        if sess is None:
+            sess = _creq.Session(impersonate="chrome")
+            _session_tls.session = sess
+        return yf.Ticker(ticker, session=sess)
     except Exception:
         return yf.Ticker(ticker)
 

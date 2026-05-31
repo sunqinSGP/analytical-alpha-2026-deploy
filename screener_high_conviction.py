@@ -18,35 +18,7 @@ from datetime import datetime
 # ===========================================================================
 # CURATED WATCHLIST — ~120 stocks across all sectors & markets
 # ===========================================================================
-WATCHLIST = [
-    # US Tech — SaaS / Cloud
-    'MSFT', 'CRM', 'ADBE', 'NOW', 'SNOW', 'DDOG', 'CRWD', 'PANW', 'ZS',
-    'QLYS', 'NET', 'MDB', 'HUBS', 'TEAM', 'WDAY', 'INTU', 'ADSK', 'PLTR',
-    # US Tech — Semiconductors / AI Infra
-    'NVDA', 'AMD', 'AVGO', 'MU', 'MRVL', 'AMAT', 'LRCX', 'KLAC', 'TXN',
-    'QCOM', 'INTC', 'SMCI', 'ANET', 'DELL', 'STX', 'WDC',
-    # US Tech — Mega Cap
-    'AAPL', 'GOOGL', 'AMZN', 'META', 'TSLA',
-    # Energy / Industrial
-    'BE', 'NEE', 'GEV', 'FSLR', 'CEG', 'VST', 'XOM', 'CVX', 'COP',
-    'CAT', 'GE', 'HON', 'EMR', 'ETN',
-    # Healthcare / Biopharma
-    'LLY', 'NVO', 'BMY', 'ALGN', 'CNC', 'UNH', 'JNJ', 'ABBV', 'MRK',
-    'PFE', 'REGN', 'VRTX', 'SDGR', 'MRNA',
-    # Financials
-    'JPM', 'BAC', 'WFC', 'GS', 'MS', 'BLK', 'V', 'MA', 'AXP',
-    # Consumer / Retail
-    'WMT', 'COST', 'AMZN', 'HD', 'LOW', 'NKE', 'SBUX', 'MCD', 'TGT',
-    # Singapore (SGX)
-    'D05.SI', 'O39.SI', 'U11.SI', 'Z74.SI', 'C52.SI', 'BN4.SI',
-    'S68.SI', 'C09.SI', 'F34.SI', 'S63.SI',
-    # Hong Kong (HKEX)
-    '0700.HK', '9988.HK', '3690.HK', '9618.HK', '1299.HK', '0005.HK',
-    '0388.HK', '2318.HK', '0941.HK', '0016.HK',
-    # European / Global
-    'SAP', 'ASML', 'NVO', 'AZN', 'HSBC', 'BHP', 'RIO', 'BP', 'SHEL',
-]
-WATCHLIST = list(dict.fromkeys(WATCHLIST))  # de-duplicate (AMZN, NVO appeared twice)
+from stock_analyzer.universe import WATCHLIST  # single source of truth (edit there)
 
 # ===========================================================================
 # SCREENING LOGIC

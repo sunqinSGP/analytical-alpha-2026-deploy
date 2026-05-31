@@ -319,82 +319,96 @@ def render_conviction_ladder(active):
 # ===========================================================================
 # Screener (moved off the analysis tabs — lives on the landing page)
 # ===========================================================================
-WATCHLIST = [
-    'MSFT', 'CRM', 'ADBE', 'NOW', 'SNOW', 'DDOG', 'CRWD', 'PANW', 'ZS', 'QLYS', 'NET', 'MDB', 'HUBS', 'TEAM', 'WDAY', 'INTU', 'ADSK', 'PLTR',
-    'NVDA', 'AMD', 'AVGO', 'MU', 'MRVL', 'AMAT', 'LRCX', 'KLAC', 'TXN', 'QCOM', 'INTC', 'SMCI', 'ANET', 'DELL', 'STX', 'WDC',
-    'AAPL', 'GOOGL', 'AMZN', 'META', 'TSLA',
-    'BE', 'NEE', 'GEV', 'FSLR', 'CEG', 'VST', 'XOM', 'CVX', 'COP', 'CAT', 'GE', 'HON', 'EMR', 'ETN',
-    'LLY', 'NVO', 'BMY', 'ALGN', 'CNC', 'UNH', 'JNJ', 'ABBV', 'MRK', 'PFE', 'REGN', 'VRTX', 'SDGR', 'MRNA',
-    'JPM', 'BAC', 'WFC', 'GS', 'MS', 'BLK', 'V', 'MA', 'AXP',
-    'WMT', 'COST', 'HD', 'LOW', 'NKE', 'SBUX', 'MCD', 'TGT',
-    'D05.SI', 'O39.SI', 'U11.SI', 'Z74.SI', 'C52.SI', 'BN4.SI', 'S68.SI', 'C09.SI', 'F34.SI', 'S63.SI',
-    '0700.HK', '9988.HK', '3690.HK', '9618.HK', '1299.HK', '0005.HK', '0388.HK', '2318.HK', '0941.HK', '0016.HK',
-    'SAP', 'ASML', 'AZN', 'HSBC', 'BHP', 'RIO', 'BP', 'SHEL',
-]
-WATCHLIST = list(dict.fromkeys(WATCHLIST))
+from stock_analyzer.universe import WATCHLIST
 
 
-def render_screener():
-    if not st.button(f"Scan {len(WATCHLIST)} stocks", type="primary"):
-        st.caption("Screens US, Singapore, Hong Kong and European markets and ranks them into "
-                   "Platinum / Gold / Silver tiers. Multi-threaded; ~30s first run, cached after.")
-        return
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    import time
-    prog, status = st.progress(0.0), st.empty()
-    rows, errors, t0 = [], [], time.time()
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        futs = {ex.submit(cached_analysis, t, 0, None): t for t in WATCHLIST}
-        for i, fut in enumerate(as_completed(futs)):
-            tk = futs[fut]
-            try:
-                r = fut.result()
-                if 'error' in r:
-                    errors.append(tk)
-                else:
-                    rows.append({
-                        'ticker': tk, 'name': r['data']['name'], 'nob': r['nob']['name'],
-                        'moat': r['qualitative']['moat']['moat_rating'],
-                        'circ_delta': r['qualitative']['moat'].get('circumvention_delta', 0),
-                        'moat_trend': r['qualitative']['moat_performance']['performance'],
-                        'risk': r['risk_management']['risk_factors']['risk_score'],
-                        'nrr': r['quantitative']['net_revenue_retention'].get('estimated_nrr_pct'),
-                        'fwd_inflection': r['quantitative']['forward_rule_of_40'].get('inflection_signal', ''),
-                        'conviction': r['thesis']['conviction'], 'price': r['data']['price'],
-                        'sector': r['data']['sector'],
-                    })
-            except Exception:
-                errors.append(tk)
-            prog.progress((i + 1) / len(futs))
-            status.caption(f"Scanning {i+1}/{len(futs)} · {tk} · {time.time()-t0:.0f}s")
-    prog.empty(); status.empty()
+def _load_saved_screen():
+    path = os.path.join(os.path.dirname(__file__), '..', 'data', 'screen_results.json')
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _render_screen_tiers(rows, universe_count, skipped):
     if not rows:
-        st.warning("No results — check the network connection.")
+        st.warning("No results.")
         return
     df = pd.DataFrame(rows)
-    df['tier'] = df.apply(lambda r: assign_screen_tier(
-        r['moat'], r['risk'], r['moat_trend'], r['nrr'], r['fwd_inflection'], r['circ_delta']), axis=1)
-
+    if 'tier' not in df.columns:
+        df['tier'] = df.apply(lambda r: assign_screen_tier(
+            r['moat'], r['risk'], r['moat_trend'], r.get('nrr'), r.get('fwd_inflection', ''), r['circ_delta']), axis=1)
     c = st.columns(4)
-    c[0].metric("Scanned", len(WATCHLIST))
+    c[0].metric("Universe", universe_count)
     c[1].metric("Platinum", int((df['tier'] == 'PLATINUM').sum()))
     c[2].metric("Gold", int((df['tier'] == 'GOLD').sum()))
     c[3].metric("Silver", int((df['tier'] == 'SILVER').sum()))
-
     for tier in ['PLATINUM', 'GOLD', 'SILVER']:
         sub = df[df['tier'] == tier].sort_values('moat', ascending=False)
         if not len(sub):
             continue
         st.markdown(f"#### {tier.title()} — {len(sub)}")
         show = sub[['ticker', 'name', 'nob', 'moat', 'circ_delta', 'moat_trend', 'risk', 'nrr', 'price', 'sector']].copy()
-        show['moat'] = show['moat'].map(lambda x: f"{x:.1f}")
-        show['nrr'] = show['nrr'].map(lambda x: f"{x:.0f}%" if pd.notna(x) else '—')
-        show['price'] = show['price'].map(lambda x: f"${x:.2f}" if pd.notna(x) else '—')
+        show['moat'] = show['moat'].map(lambda x: f"{float(x):.1f}" if pd.notna(x) else '—')
+        show['nrr'] = show['nrr'].map(lambda x: f"{float(x):.0f}%" if pd.notna(x) else '—')
+        show['price'] = show['price'].map(lambda x: f"${float(x):.2f}" if pd.notna(x) else '—')
         show.columns = ['Ticker', 'Name', 'Business model', 'Moat', 'Circ.Δ', 'Trend', 'Risk', 'Rev ret*', 'Price', 'Sector']
         st.dataframe(show, hide_index=True, width='stretch')
-    if errors:
-        st.caption(f"{len(errors)} skipped (no data): {', '.join(errors[:8])}{'…' if len(errors) > 8 else ''}")
+    if skipped:
+        st.caption(f"{len(skipped)} skipped (no data): {', '.join(str(s) for s in skipped[:8])}{'…' if len(skipped) > 8 else ''}")
     st.caption("*Rev retention is a total-revenue proxy, not true cohort NRR.")
+
+
+def render_screener():
+    saved = _load_saved_screen()
+    cc = st.columns([0.62, 0.38])
+    with cc[0]:
+        if saved:
+            st.caption(f"Latest nightly scan: **{saved.get('generated_human', '?')}** · "
+                       f"{saved.get('analysed', 0)} of {saved.get('universe', len(WATCHLIST))} analysed. "
+                       "Refreshes automatically each night.")
+        else:
+            st.caption(f"Screens {len(WATCHLIST)} names across US, Singapore, Hong Kong and Europe into "
+                       "Platinum / Gold / Silver tiers. A nightly job keeps this current.")
+    with cc[1]:
+        live = st.button(f"Scan now ({len(WATCHLIST)})", type="primary", use_container_width=True)
+
+    if live:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import time
+        prog, status = st.progress(0.0), st.empty()
+        rows, errors, t0 = [], [], time.time()
+        with ThreadPoolExecutor(max_workers=5) as ex:
+            futs = {ex.submit(cached_analysis, t, 0, None): t for t in WATCHLIST}
+            for i, fut in enumerate(as_completed(futs)):
+                tk = futs[fut]
+                try:
+                    r = fut.result()
+                    if 'error' in r:
+                        errors.append(tk)
+                    else:
+                        rows.append({
+                            'ticker': tk, 'name': r['data']['name'], 'nob': r['nob']['name'],
+                            'moat': r['qualitative']['moat']['moat_rating'],
+                            'circ_delta': r['qualitative']['moat'].get('circumvention_delta', 0),
+                            'moat_trend': r['qualitative']['moat_performance']['performance'],
+                            'risk': r['risk_management']['risk_factors']['risk_score'],
+                            'nrr': r['quantitative']['net_revenue_retention'].get('estimated_nrr_pct'),
+                            'fwd_inflection': r['quantitative']['forward_rule_of_40'].get('inflection_signal', ''),
+                            'conviction': r['thesis']['conviction'], 'price': r['data']['price'],
+                            'sector': r['data']['sector'],
+                        })
+                except Exception:
+                    errors.append(tk)
+                prog.progress((i + 1) / len(futs))
+                status.caption(f"Scanning {i+1}/{len(futs)} · {tk} · {time.time()-t0:.0f}s")
+        prog.empty(); status.empty()
+        _render_screen_tiers(rows, len(WATCHLIST), errors)
+    elif saved and saved.get('results'):
+        _render_screen_tiers(saved['results'], saved.get('universe', len(WATCHLIST)), saved.get('skipped', []))
+    else:
+        st.info("No saved scan yet — click **Scan now**, or the nightly job will populate it at 11pm.")
 
 
 # ===========================================================================
