@@ -324,8 +324,13 @@ def render_sector_rebound(data):
     for s in (data.get('sectors') or []):
         name = (s.get('name') or '').strip()
         sym = (s.get('symbol') or '').strip()
-        head = (f'<span style="font-weight:700; font-size:1.02rem; color:var(--ink);">{name}</span>'
-                + (pill(sym) if sym else ''))
+        # Prefer the deterministic tag (symbol -> group); fall back to whatever the model echoed.
+        grp = sct.GROUP.get(sym) or (s.get('group') or '').strip().title()
+        head = f'<span style="font-weight:700; font-size:1.02rem; color:var(--ink);">{name}</span>'
+        if sym:
+            head += pill(sym)
+        if grp in ('Sector', 'Industry'):
+            head += pill(grp, 'accent' if grp == 'Industry' else '')
         body = (_block('Why it sold off', s.get('reason_down'), 'var(--faint)', 'var(--line)')
                 + _block('Bull case', s.get('bull_case'), 'var(--pos)', '#bbf7d0')
                 + _block('Key risk', s.get('risk'), 'var(--neg)', '#fecaca'))

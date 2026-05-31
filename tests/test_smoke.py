@@ -252,6 +252,12 @@ check("every tracked group has a Sector/Industry tag",
 _sm = ai.sector_rebound_messages(_ranked, [{'title': 'Oil slumps on demand fears'}])
 check("sector rebound prompt embeds sector + headline",
       'Energy' in _sm[0]['content'] and 'Oil slumps' in _sm[0]['content'])
+_si = ai.sector_rebound_messages(
+    [{'name': 'Software / SaaS', 'symbol': 'IGV', 'group': 'Industry', 'rsi': 30}], [])
+check("rebound prompt tags granular industries vs broad sectors",
+      'granular industry' in _si[0]['content'])
+check("rebound prompt requests the group field in output",
+      '"group"' in ai.SECTOR_REBOUND_INSTRUCTION)
 
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 sys.exit(1 if FAIL else 0)

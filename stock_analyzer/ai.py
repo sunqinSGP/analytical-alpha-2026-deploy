@@ -152,20 +152,23 @@ def summarize_macro(api_key, news_items, model=DEFAULT_MODEL):
 
 # ---------------------------------------------------------------- oversold sector rebound
 SECTOR_REBOUND_INSTRUCTION = (
-    "You are a sector strategist. Below are sector ETFs that screen as OVERSOLD on price technicals "
-    "(RSI, drawdown from the 52-week high, distance below the 200-day average, recent stabilisation), "
-    "most washed-out first, plus recent market headlines. "
+    "You are a sector strategist. Below are sector / industry ETFs that screen as OVERSOLD on price "
+    "technicals (RSI, drawdown from the 52-week high, distance below the 200-day average, recent "
+    "stabilisation), most washed-out first, plus recent market headlines. Each item is tagged as a "
+    "broad GICS sector or a granular industry/theme (e.g. Software/SaaS, Semiconductors or Cybersecurity "
+    "sit within Technology; Biotech within Health Care). When an item is a granular industry, reason at "
+    "that finer scope — what is specific to that slice rather than the whole parent sector. "
     "Respond with ONLY a JSON object (no prose, no markdown, no code fence) of this exact shape:\n"
     '{\n'
     '  "market_context": "<one sentence of overall context>",\n'
     '  "sectors": [\n'
-    '    {"name": "<sector name>", "symbol": "<ETF ticker>", '
+    '    {"name": "<name>", "symbol": "<ETF ticker>", "group": "Sector" | "Industry", '
     '"reason_down": "<one or two sentences on why it sold off>", '
     '"bull_case": "<one or two sentences on the near-term rebound case>", '
     '"risk": "<one sentence on the main risk to that view>"}\n'
     '  ]\n'
     '}\n'
-    "Cover the sectors in the same order given. Be balanced and specific, and tie to the headlines "
+    "Cover the items in the same order given. Be balanced and specific, and tie to the headlines "
     "where relevant. This is informational analysis, not financial advice."
 )
 
@@ -173,8 +176,9 @@ SECTOR_REBOUND_INSTRUCTION = (
 def sector_rebound_messages(oversold_sectors, news_items):
     lines = []
     for s in oversold_sectors:
+        kind = 'broad GICS sector' if s.get('group', 'Sector') == 'Sector' else 'granular industry/theme'
         lines.append(
-            f"- {s.get('name', s.get('symbol'))} ({s.get('symbol')}): RSI {s.get('rsi')}, "
+            f"- {s.get('name', s.get('symbol'))} ({s.get('symbol')}) [{kind}]: RSI {s.get('rsi')}, "
             f"{s.get('pct_off_52w_high')}% off 52-wk high, {s.get('pct_vs_200dma')}% vs 200-day MA, "
             f"returns 1w {s.get('ret_1w')}% / 1m {s.get('ret_1m')}% / 3m {s.get('ret_3m')}%")
     secs = "\n".join(lines) if lines else "(no oversold sectors)"
