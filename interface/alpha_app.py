@@ -482,7 +482,7 @@ def _render_oversold_sectors(sectors_dict):
         rows.append({
             'Group': s.get('name'),
             'Type': s.get('group', 'Sector'),
-            'Status': 'Oversold' if s.get('oversold') else 'Watch',
+            'Status': sct.status_label(s),
             'RSI': f"{s['rsi']:.0f}" if s.get('rsi') is not None else '—',
             'Off 52-wk high': f"{s['pct_off_52w_high']:.0f}%" if s.get('pct_off_52w_high') is not None else '—',
             'vs 200-day': f"{s['pct_vs_200dma']:+.0f}%" if s.get('pct_vs_200dma') is not None else '—',
@@ -504,7 +504,7 @@ def _render_oversold_sectors(sectors_dict):
             "|---|---|---|\n"
             "| **Group** | The sector or industry, via its ETF proxy | What's being measured |\n"
             "| **Type** | Broad GICS *Sector* vs granular *Industry / theme* | Scope — a whole sector vs a slice like SaaS or semis |\n"
-            "| **Status** | *Oversold* vs *Watch* | **Oversold** = genuinely washed-out (RSI < ~42 *or* >12% off the high); **Watch** = softening but not extreme |\n"
+            "| **Status** | *Oversold* · *Rebounding* · *Watch* | **Oversold** = washed out *and momentum still weak* (RSI < 42, or deep drawdown with RSI under 50). **Rebounding** = was beaten down (>12% off high) but RSI has recovered above 50 — already turning up. **Watch** = softening, not extreme. *(This is why a deeply drawn-down group with RSI in the 60s reads 'Rebounding', not 'Oversold'.)* |\n"
             "| **RSI** | 14-day Relative Strength Index (momentum) | <30 deeply oversold · 30–45 soft · >70 overbought. The classic mean-reversion gauge |\n"
             "| **Off 52-wk high** | % below the 1-year high | The *depth* of the selloff — how much has already been given back |\n"
             "| **vs 200-day** | % above / below the 200-day average | *Trend* context. Well below = stretched / in a downtrend; reclaiming it is an early turn signal |\n"

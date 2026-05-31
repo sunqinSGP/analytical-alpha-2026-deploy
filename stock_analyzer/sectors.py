@@ -113,3 +113,23 @@ def rule_note(m):
     if m.get('ret_1w') is not None:
         bits.append("stabilising" if m['ret_1w'] > 0 else "still falling")
     return " · ".join(bits)
+
+
+def status_label(m):
+    """Where a group sits in the drawdown -> rebound cycle, for the Status column.
+
+    The raw 'oversold' flag fires on EITHER a low RSI OR a deep drawdown, so a group that fell
+    hard months ago but has since bounced (deep drawdown + recovered RSI) would read 'Oversold'
+    even with RSI in the 60s — confusing. This separates the two: a name is only 'Oversold' while
+    momentum is still weak; once RSI has recovered off a washed-out base it's 'Rebounding'.
+    """
+    rsi = m.get('rsi')
+    off = m.get('pct_off_52w_high')
+    deep = off is not None and off < -12          # still well below the 1-year high
+    if rsi is None:
+        return 'Oversold' if deep else 'Watch'
+    if deep and rsi >= 50:
+        return 'Rebounding'    # beaten down, but momentum has clearly turned up
+    if rsi < 42 or deep:
+        return 'Oversold'      # weak momentum now, or deep drawdown not yet turning
+    return 'Watch'             # softening but not extreme

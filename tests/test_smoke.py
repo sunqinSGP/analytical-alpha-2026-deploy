@@ -243,6 +243,14 @@ check("uptrend not flagged oversold", sct.oversold_metrics(_up)['oversold'] is F
 _ranked = sct.rank_oversold({'XLE': {'name': 'Energy', **_m},
                              'XLK': {'name': 'Technology', **sct.oversold_metrics(_up)}})
 check("rank_oversold returns only oversold sectors", [r['symbol'] for r in _ranked] == ['XLE'])
+check("status_label: deep drawdown + recovered RSI reads 'Rebounding', not 'Oversold'",
+      sct.status_label({'rsi': 62, 'pct_off_52w_high': -25, 'ret_1w': 5.8}) == 'Rebounding')
+check("status_label: low RSI reads 'Oversold'",
+      sct.status_label({'rsi': 38, 'pct_off_52w_high': -8}) == 'Oversold')
+check("status_label: deep drawdown still-weak RSI reads 'Oversold'",
+      sct.status_label({'rsi': 45, 'pct_off_52w_high': -20}) == 'Oversold')
+check("status_label: shallow + healthy reads 'Watch'",
+      sct.status_label({'rsi': 56, 'pct_off_52w_high': -5}) == 'Watch')
 check("granular industries are tracked (SaaS/semis/biotech)",
       {'IGV', 'SMH', 'XBI'} <= set(sct.INDUSTRIES))
 check("ALL_SECTORS merges GICS sectors + industries",
