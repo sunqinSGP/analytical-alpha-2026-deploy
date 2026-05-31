@@ -20,6 +20,7 @@ from stock_analyzer.alpha_engine import (
 from stock_analyzer.verdict import CONV_COLORS, build_factor_attribution, recommendation_for
 from stock_analyzer import portfolio as pf
 from stock_analyzer import ai, news, sectors as sct
+from stock_analyzer import watchlist as wl
 
 st.set_page_config(page_title="Analytical Alpha 2026", page_icon="◆",
                    layout="wide", initial_sidebar_state="collapsed")
@@ -76,6 +77,25 @@ def cached_resolve(query):
     """Resolve a typed name/symbol to a Yahoo ticker (cached a day). known=universe fast-paths
     our tracked symbols without a network call."""
     return resolve_ticker(query, known=set(WATCHLIST))
+
+
+WATCHLIST_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'watchlist.json')
+
+
+def get_watchlist():
+    """The user's saved watchlist (session-cached, loaded from the gitignored JSON file)."""
+    if 'watchlist' not in st.session_state:
+        st.session_state['watchlist'] = wl.load(WATCHLIST_PATH)
+    return st.session_state['watchlist']
+
+
+def set_watchlist(tickers):
+    """Update the watchlist in session and persist it to disk (best-effort)."""
+    st.session_state['watchlist'] = wl.normalize(tickers)
+    try:
+        wl.save(WATCHLIST_PATH, st.session_state['watchlist'])
+    except Exception:
+        pass
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -619,6 +639,72 @@ def render_screener():
 
 
 # ===========================================================================
+# Watchlist
+# ===========================================================================
+def render_watchlist():
+    wlist = get_watchlist()
+
+    ac = st.columns([0.72, 0.28])
+    with ac[0]:
+        new = st.text_input("Add to watchlist", key="wl_add_input", label_visibility="collapsed",
+                            placeholder="Add a company or ticker — Tencent · NVDA · D05.SI")
+    with ac[1]:
+        if st.button("☆ Add", type="primary", use_container_width=True) and (new or '').strip():
+            res = cached_resolve(new.strip())
+            set_watchlist(wl.add(wlist, (res or {}).get('symbol') or new.strip().upper()))
+            st.rerun()
+
+    if not wlist:
+        st.info("No names yet. Add one above, or open any stock and click **☆ Watch**. "
+                "Your list is saved locally and persists between sessions.")
+        return
+    st.caption(f"{len(wlist)} names · saved locally · **Analyze** opens one, **✕** removes it.")
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _one(t):
+        try:
+            r = cached_analysis(t, 0, None)
+            if 'error' in r:
+                return {'ticker': t, 'error': True}
+            return {'ticker': t, 'name': r['data']['name'], 'price': r['data']['price'],
+                    'ccy': detect_currency(t), 'conviction': r['thesis']['conviction'],
+                    'moat': r['qualitative']['moat']['moat_rating'],
+                    'risk': r['risk_management']['risk_factors']['risk_level'], 'nob': r['nob']['name']}
+        except Exception:
+            return {'ticker': t, 'error': True}
+
+    with st.spinner("Refreshing watchlist…"):
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            metrics = {m['ticker']: m for m in ex.map(_one, wlist)}
+
+    for t in wlist:
+        m = metrics.get(t, {'ticker': t, 'error': True})
+        row = st.columns([0.74, 0.16, 0.10])
+        with row[0]:
+            if m.get('error'):
+                st.markdown(f"**{t}** · <span style='color:var(--faint);'>no data — delisted or rate-limited</span>",
+                            unsafe_allow_html=True)
+            else:
+                cc = CURRENCY_SYMBOLS.get(m['ccy'], '$')
+                conv_color = CONV_COLORS.get(m['conviction'], 'var(--muted)')
+                price = f"{cc}{m['price']:,.2f}" if m['price'] else "—"
+                st.markdown(
+                    "<div style='display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;'>"
+                    f"<span style='font-weight:700;'>{m['ticker']}</span>"
+                    f"<span style='color:var(--muted); font-size:0.85rem;'>{m['name'][:30]}</span>"
+                    f"<span style='color:{conv_color}; font-weight:600; font-size:0.82rem;'>{m['conviction'].title()}</span>"
+                    f"<span style='color:var(--faint); font-size:0.82rem;'>{price} · moat {m['moat']:.1f}/10 · "
+                    f"{m['risk']} risk · {m['nob']}</span></div>", unsafe_allow_html=True)
+        if row[1].button("Analyze", key=f"wl_go_{t}", use_container_width=True):
+            st.session_state['wl_load'] = t
+            st.rerun()
+        if row[2].button("✕", key=f"wl_rm_{t}", use_container_width=True, help=f"Remove {t}"):
+            set_watchlist(wl.remove(wlist, t))
+            st.rerun()
+
+
+# ===========================================================================
 # AI chat (shared by the landing "Ask AI" tab and the single-stock "Ask AI" tab)
 # ===========================================================================
 def render_ai_chat(chatkey, system_text, placeholder, starters, suffix):
@@ -827,6 +913,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 AUTO_FW = 'Auto-detect'
+# A one-click "Analyze" from the Watchlist preloads the ticker box and auto-confirms it.
+if st.session_state.get('wl_load'):
+    _pre = st.session_state.pop('wl_load')
+    st.session_state['ticker_input'] = _pre
+    st.session_state['confirmed'] = _pre.upper()
+    st.session_state['fw_choice'] = AUTO_FW
 # Apply a framework the engine auto-detected on the previous run (queued after analysis), set
 # BEFORE the selectbox is created so it shows up as the selected value.
 if st.session_state.get('fw_pending'):
@@ -838,7 +930,7 @@ with st.form("analyze_form"):
     c1, c2, c3 = st.columns([0.5, 0.32, 0.18])
     with c1:
         _raw = st.text_input(
-            "Company or ticker", placeholder="Tencent · AAPL · 3323.HK · DBS",
+            "Company or ticker", placeholder="Tencent · AAPL · 3323.HK · DBS", key="ticker_input",
             help="Type a company name OR a symbol — e.g. 'Tencent' resolves to 0700.HK, 'apple' to AAPL. "
                  "Foreign listings also work via Yahoo suffixes (.HK, .SI, .L…).",
         ).strip()
@@ -903,7 +995,12 @@ if not ticker:
     st.markdown("<br>", unsafe_allow_html=True)
     st.caption("Enter a ticker above for a single-stock deep dive — or work with your whole book below.")
 
-    tab_ai, tab_scr, tab_macro, tab_pf = st.tabs(["Ask AI", "Screener", "Macro", "Portfolio"])
+    tab_ai, tab_wl, tab_scr, tab_macro, tab_pf = st.tabs(
+        ["Ask AI", "Watchlist", "Screener", "Macro", "Portfolio"])
+
+    with tab_wl:
+        st.markdown("#### Your watchlist")
+        render_watchlist()
 
     with tab_ai:
         st.markdown("#### Ask the strategist")
@@ -1046,13 +1143,23 @@ mcap = info.get('marketCap'); name = data['name']
 # ---- Identity + verdict ----
 emp = data.get('employees')
 emp_str = f"{emp:,}" if isinstance(emp, (int, float)) else "N/A"
-st.markdown(f"""
-<div style="margin:6px 0 2px 0;">
-  <h1>{name} <span style="font-weight:600; color:var(--faint); font-size:1.05rem;">{ticker}</span></h1>
-  <div style="font-size:0.82rem; color:var(--muted);">{data['sector']} · {data['industry']} · {data.get('country','')} ·
-    {nob['name']} · {currency} · {emp_str} employees</div>
-</div>
-""", unsafe_allow_html=True)
+_idc = st.columns([0.78, 0.22])
+with _idc[0]:
+    st.markdown(f"""
+    <div style="margin:6px 0 2px 0;">
+      <h1>{name} <span style="font-weight:600; color:var(--faint); font-size:1.05rem;">{ticker}</span></h1>
+      <div style="font-size:0.82rem; color:var(--muted);">{data['sector']} · {data['industry']} · {data.get('country','')} ·
+        {nob['name']} · {currency} · {emp_str} employees</div>
+    </div>
+    """, unsafe_allow_html=True)
+with _idc[1]:
+    _watching = wl.contains(get_watchlist(), ticker)
+    if st.button("★ Watching" if _watching else "☆ Watch", use_container_width=True,
+                 help="Remove from your watchlist" if _watching else "Add to your watchlist",
+                 type=("secondary" if _watching else "primary")):
+        set_watchlist(wl.remove(get_watchlist(), ticker) if _watching
+                      else wl.add(get_watchlist(), ticker))
+        st.rerun()
 
 render_verdict_hero(result)
 

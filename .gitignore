@@ -6,3 +6,4 @@ __pycache__/
 *.local.json
 data/screen_results.json
 data/screen_log.txt
+data/watchlist.json

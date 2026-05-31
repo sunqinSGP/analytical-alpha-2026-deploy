@@ -19,6 +19,7 @@ from stock_analyzer import portfolio as pf
 from stock_analyzer import ai
 from stock_analyzer import news as newsmod
 from stock_analyzer import sectors as sct
+from stock_analyzer import watchlist as wl
 
 PASS, FAIL = 0, 0
 
@@ -282,6 +283,22 @@ check("rebound prompt tags granular industries vs broad sectors",
       'granular industry' in _si[0]['content'])
 check("rebound prompt requests the group field in output",
       '"group"' in ai.SECTOR_REBOUND_INSTRUCTION)
+
+print("\n[13] Watchlist")
+check("watchlist normalises: upper-cases, de-dupes, drops blanks, keeps order",
+      wl.normalize(['aapl', ' nvda ', 'AAPL', '']) == ['AAPL', 'NVDA'])
+check("watchlist add is idempotent", wl.add(['AAPL'], 'aapl') == ['AAPL'])
+check("watchlist add appends a new symbol", wl.add(['AAPL'], 'nvda') == ['AAPL', 'NVDA'])
+check("watchlist remove is case-insensitive", wl.remove(['AAPL', 'NVDA'], 'aapl') == ['NVDA'])
+check("watchlist contains is case-insensitive", wl.contains(['AAPL'], 'aapl') and not wl.contains(['AAPL'], 'TSLA'))
+_wlp = os.path.join(os.path.dirname(__file__), '_wl_test.json')
+try:
+    wl.save(_wlp, ['nvda', 'AAPL', 'nvda'])
+    check("watchlist round-trips through disk (normalised)", wl.load(_wlp) == ['NVDA', 'AAPL'])
+finally:
+    if os.path.exists(_wlp):
+        os.remove(_wlp)
+check("watchlist load tolerates a missing file", wl.load('does/not/exist.json') == [])
 
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 sys.exit(1 if FAIL else 0)
