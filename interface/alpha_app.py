@@ -826,32 +826,41 @@ st.markdown("""
 <hr style="margin:8px 0 18px 0;">
 """, unsafe_allow_html=True)
 
-c1, c2, c3 = st.columns([0.5, 0.28, 0.22])
-with c1:
-    _raw = st.text_input(
-        "Company or ticker", placeholder="Tencent · AAPL · 3323.HK · DBS",
-        help="Type a company name OR a symbol — e.g. 'Tencent' resolves to 0700.HK, 'apple' to AAPL. "
-             "Foreign listings also work directly via Yahoo suffixes (.HK Hong Kong, .SI Singapore, .L London…).",
-    ).strip()
-    ticker, _resolve_info = '', None
-    if _raw:
-        _res = cached_resolve(_raw)
-        if _res and _res.get('symbol'):
-            ticker = _res['symbol'].upper()
-            _resolve_info = _res if _res.get('from_name') else None
-        else:
-            ticker = _raw.upper()
-with c2:
-    framework_options = ['Auto-detect framework'] + [v['name'] for v in NoB_TYPES.values()]
-    framework_choice = st.selectbox(
-        "Valuation framework", framework_options, index=0,
-        help="Which of the six valuation lenses to apply. Leave on Auto-detect unless you want to override how the stock is classified.",
-    )
-with c3:
-    weight_pct = st.number_input(
-        "Your position % (optional)", 0.0, 100.0, 0.0, 0.5,
-        help="Your current holding in this stock as a % of your portfolio. Tailors the sizing advice — e.g. flags TRIM when you're over the risk-based cap. Leave at 0 to just see the suggested max.",
-    )
+AUTO_FW = 'Auto-detect'
+# Apply a framework the engine auto-detected on the previous run (queued after analysis), set
+# BEFORE the selectbox is created so it shows up as the selected value.
+if st.session_state.get('fw_pending'):
+    st.session_state['fw_choice'] = st.session_state.pop('fw_pending')
+st.session_state.setdefault('fw_choice', AUTO_FW)
+
+# A form: nothing runs until the user presses Enter or clicks Analyze (typing alone won't trigger).
+with st.form("analyze_form"):
+    c1, c2, c3 = st.columns([0.5, 0.32, 0.18])
+    with c1:
+        _raw = st.text_input(
+            "Company or ticker", placeholder="Tencent · AAPL · 3323.HK · DBS",
+            help="Type a company name OR a symbol — e.g. 'Tencent' resolves to 0700.HK, 'apple' to AAPL. "
+                 "Foreign listings also work via Yahoo suffixes (.HK, .SI, .L…).",
+        ).strip()
+    with c2:
+        fw_options = [AUTO_FW] + [v['name'] for v in NoB_TYPES.values()]
+        framework_choice = st.selectbox(
+            "Valuation framework", fw_options, key='fw_choice',
+            help="Auto-detect classifies the business and fills the lens in here after you run. "
+                 "Pick a specific framework to override it.",
+        )
+    with c3:
+        st.markdown("<div style='height:1.68rem;'></div>", unsafe_allow_html=True)
+        submit = st.form_submit_button("Analyze ↵", type="primary", use_container_width=True)
+
+ticker, _resolve_info = '', None
+if _raw:
+    _res = cached_resolve(_raw)
+    if _res and _res.get('symbol'):
+        ticker = _res['symbol'].upper()
+        _resolve_info = _res if _res.get('from_name') else None
+    else:
+        ticker = _raw.upper()
 
 if _resolve_info:
     _nm = _resolve_info.get('name') or ''
@@ -860,6 +869,11 @@ if _resolve_info:
     if _alts:
         _msg += "  ·  not right? try: " + ", ".join(_alts)
     st.caption(_msg)
+
+# Confirm gate — remember the last submitted ticker so the analysis persists across reruns
+# (tab clicks, the auto-detect refresh) without re-clicking, but typing a new name doesn't run.
+if submit and ticker:
+    st.session_state['confirmed'] = ticker
 
 
 # ===========================================================================
@@ -986,15 +1000,34 @@ if not ticker:
 # ===========================================================================
 # RUN ANALYSIS
 # ===========================================================================
+# Only analyse a ticker the user has actually submitted (Enter/Analyze), not one mid-typed.
+if st.session_state.get('confirmed') != ticker:
+    _hint = f" — {_resolve_info['name']}" if (_resolve_info and _resolve_info.get('name')) else ""
+    st.info(f"Press **Enter** or click **Analyze** to run the framework on **{ticker}**{_hint}.")
+    st.stop()
+
 FRAMEWORK_MAP = {v['name']: k for k, v in NoB_TYPES.items()}
-framework_override = FRAMEWORK_MAP.get(framework_choice) if framework_choice != 'Auto-detect framework' else None
+# A freshly-changed ticker always starts on auto-detect (ignore a stale override from the last
+# name); for the same ticker, honour whatever framework the dropdown shows.
+_fresh_ticker = (ticker != st.session_state.get('analyzed_ticker'))
+framework_override = None if _fresh_ticker else \
+    (FRAMEWORK_MAP.get(framework_choice) if framework_choice != AUTO_FW else None)
 
 with st.spinner(f"Analysing {ticker}…"):
-    result = cached_analysis(ticker, weight_pct, framework_override)
+    result = cached_analysis(ticker, 0, framework_override)
 
 if 'error' in result:
     st.error(result['error'])
     st.stop()
+
+st.session_state['analyzed_ticker'] = ticker
+# Auto-populate the framework dropdown with the lens the engine picked (once), so the user sees
+# it and can override — then re-render with that framework selected.
+_detected_fw = result['nob']['name']
+if (_detected_fw in FRAMEWORK_MAP and st.session_state.get('fw_choice') != _detected_fw
+        and (_fresh_ticker or framework_choice == AUTO_FW)):
+    st.session_state['fw_pending'] = _detected_fw
+    st.rerun()
 
 data = result['data']; info = data['info']
 quant = result['quantitative']; qual = result['qualitative']
@@ -1021,7 +1054,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-render_verdict_hero(result, weight_pct)
+render_verdict_hero(result)
 
 # ---- KPI strip ----
 st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
@@ -1197,11 +1230,10 @@ with tab_mr:
                     st.markdown(f'<small style="color:var(--neg);">– {s}</small>', unsafe_allow_html=True)
 
     st.markdown("#### Risk & sizing")
-    rc = st.columns(4)
+    rc = st.columns(3)
     rc[0].metric("Risk level", risk_factors.get('risk_level', 'N/A'))
     rc[1].metric("Risk score", f"{risk_factors.get('risk_score',0)}/10")
     rc[2].metric("Max position", f"{risk_factors.get('max_suggested_position',10)}% NAV")
-    rc[3].metric("Current", f"{risk_mgmt['position_sizing']['current_weight_pct']:.1f}%")
 
     risks = risk_factors.get('risks', [])
     if risks:
