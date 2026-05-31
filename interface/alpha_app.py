@@ -289,6 +289,44 @@ def render_macro(data):
         st.markdown(f'<div class="card">{rows}</div>', unsafe_allow_html=True)
 
 
+def render_sector_rebound(data):
+    """Render the structured oversold-rebound read: a context line, then one card per sector with
+    three colour-coded sections — neutral 'Why it sold off', green 'Bull case', red 'Key risk'.
+    Falls back to plain text if the model didn't return structured JSON."""
+    if not isinstance(data, dict) or data.get('_raw') is not None:
+        st.markdown(data.get('_raw', '') if isinstance(data, dict) else str(data))
+        return
+
+    ctx = (data.get('market_context') or '').strip()
+    if ctx:
+        st.markdown(
+            '<div class="card" style="border-left:4px solid var(--accent);">'
+            f'<div style="font-size:0.96rem; font-weight:600; color:var(--ink); line-height:1.5;">{ctx}</div>'
+            '</div>', unsafe_allow_html=True)
+
+    def _block(label, text, label_color, bar):
+        text = (text or '').strip()
+        if not text:
+            return ''
+        return ('<div style="margin-top:11px; padding-left:11px; '
+                f'border-left:3px solid {bar};">'
+                f'<div class="sectlabel" style="margin:0 0 3px 0; color:{label_color};">{label}</div>'
+                f'<div style="font-size:0.92rem; color:var(--slate); line-height:1.55;">{text}</div></div>')
+
+    for s in (data.get('sectors') or []):
+        name = (s.get('name') or '').strip()
+        sym = (s.get('symbol') or '').strip()
+        head = (f'<span style="font-weight:700; font-size:1.02rem; color:var(--ink);">{name}</span>'
+                + (pill(sym) if sym else ''))
+        body = (_block('Why it sold off', s.get('reason_down'), 'var(--faint)', 'var(--line)')
+                + _block('Bull case', s.get('bull_case'), 'var(--pos)', '#bbf7d0')
+                + _block('Key risk', s.get('risk'), 'var(--neg)', '#fecaca'))
+        st.markdown(
+            '<div class="card" style="margin-top:10px;">'
+            f'<div style="display:flex; align-items:center; gap:11px; flex-wrap:wrap;">{head}</div>'
+            f'{body}</div>', unsafe_allow_html=True)
+
+
 # ===========================================================================
 # Verdict hero
 # ===========================================================================
@@ -448,9 +486,9 @@ def _render_oversold_sectors(sectors_dict):
             try:
                 with st.spinner("Reasoning through the setups…"):
                     _news = cached_news()
-                    _txt = cached_sector_explain(key, _llm_model(), json.dumps(ranked),
-                                                 tuple(n['title'] for n in _news))
-                st.markdown(_txt)
+                    _data = cached_sector_explain(key, _llm_model(), json.dumps(ranked),
+                                                  tuple(n['title'] for n in _news))
+                render_sector_rebound(_data)
                 st.caption("AI-generated · informational, not financial advice.")
             except Exception as e:
                 st.error(f"Couldn't reach the model: {e}")

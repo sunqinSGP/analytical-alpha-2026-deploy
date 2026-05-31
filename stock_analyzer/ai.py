@@ -132,11 +132,19 @@ def summarize_macro(api_key, news_items, model=DEFAULT_MODEL):
 SECTOR_REBOUND_INSTRUCTION = (
     "You are a sector strategist. Below are sector ETFs that screen as OVERSOLD on price technicals "
     "(RSI, drawdown from the 52-week high, distance below the 200-day average, recent stabilisation), "
-    "most washed-out first, plus recent market headlines. For each sector, in 2-4 sentences give: "
-    "(1) the likely REASON it sold off, and (2) the BULL CASE for a near-term rebound, plus the main "
-    "RISK to that view. Be balanced and specific, and tie to the headlines where relevant. Reply in "
-    "Markdown — a one-line market context first, then a short section per sector. This is informational "
-    "analysis, not financial advice."
+    "most washed-out first, plus recent market headlines. "
+    "Respond with ONLY a JSON object (no prose, no markdown, no code fence) of this exact shape:\n"
+    '{\n'
+    '  "market_context": "<one sentence of overall context>",\n'
+    '  "sectors": [\n'
+    '    {"name": "<sector name>", "symbol": "<ETF ticker>", '
+    '"reason_down": "<one or two sentences on why it sold off>", '
+    '"bull_case": "<one or two sentences on the near-term rebound case>", '
+    '"risk": "<one sentence on the main risk to that view>"}\n'
+    '  ]\n'
+    '}\n'
+    "Cover the sectors in the same order given. Be balanced and specific, and tie to the headlines "
+    "where relevant. This is informational analysis, not financial advice."
 )
 
 
@@ -157,5 +165,15 @@ def sector_rebound_messages(oversold_sectors, news_items):
 
 
 def explain_sector_rebound(api_key, oversold_sectors, news_items, model=DEFAULT_MODEL):
-    return complete(api_key, sector_rebound_messages(oversold_sectors, news_items),
-                    model=model, max_tokens=1300, temperature=0.4)
+    """Return a structured dict the UI can style:
+    {market_context, sectors:[{name, symbol, reason_down, bull_case, risk}]}.
+    Falls back to {'_raw': <text>} if the model doesn't return valid JSON."""
+    raw = complete(api_key, sector_rebound_messages(oversold_sectors, news_items),
+                   model=model, max_tokens=1500, temperature=0.4, json_mode=True)
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and 'sectors' in data:
+            return data
+    except Exception:
+        pass
+    return {'_raw': raw}
