@@ -95,7 +95,7 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 :root{
-  --ink:#0f172a; --slate:#475569; --muted:#64748b; --faint:#94a3b8;
+  --ink:#0f172a; --slate:#39455a; --muted:#4f5d73; --faint:#69768c;
   --line:#e7eaee; --bg:#f7f8fa; --surface:#ffffff;
   --accent:#2563eb; --accent-soft:#eff6ff; --accent-line:#bfdbfe;
   --pos:#16a34a; --neg:#dc2626; --amber:#b45309;
@@ -154,7 +154,7 @@ small{ color:var(--muted); }
 
 /* st.metric → minimal */
 [data-testid="stMetric"]{ background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
-[data-testid="stMetricLabel"] p{ font-size:0.76rem !important; font-weight:600 !important; text-transform:uppercase;
+[data-testid="stMetricLabel"] p{ font-size:0.76rem !important; font-weight:700 !important; text-transform:uppercase;
   letter-spacing:0.06em; color:var(--muted) !important; }
 [data-testid="stMetricValue"]{ font-size:1.3rem !important; font-weight:700 !important; color:var(--ink) !important;
   font-variant-numeric:tabular-nums; letter-spacing:-0.01em; white-space:nowrap; overflow:visible; }
