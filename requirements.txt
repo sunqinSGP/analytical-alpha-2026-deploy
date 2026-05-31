@@ -6,5 +6,7 @@ yfinance>=0.2.55      # cap lifted — Cloud was stuck on an older line Yahoo no
 curl_cffi>=0.7        # browser impersonation: stops Yahoo rate-limiting shared cloud IPs
 requests>=2.31
 openai>=1.30          # DeepSeek chat uses the OpenAI-compatible SDK
+streamlit-mic-recorder>=0.0.8   # voice input: browser mic -> text
+gTTS>=2.5             # voice output: text -> speech
 # Dropped (installed but unused): flask, scikit-learn, matplotlib, plotly.
 # Charts use Streamlit's built-in st.line_chart (no plotly dependency).

@@ -943,8 +943,8 @@ with tab_mk:
 
 # ------------------------------------------------------------------ ASK AI
 with tab_ask:
-    st.caption("Ask about this analysis — answers are grounded in the app's own numbers. "
-               "AI-generated, informational, not financial advice.")
+    st.caption("Speak or type to ask about this analysis — answers are grounded in the app's own "
+               "numbers. AI-generated, informational, not financial advice.")
     _key = _llm_key()
     if not _key:
         st.info("**Enable the assistant:** add a `deepseek_api_key` to your Streamlit secrets "
@@ -952,15 +952,30 @@ with tab_ask:
     else:
         _chatkey = f"chat::{ticker}"
         _hist = st.session_state.setdefault(_chatkey, [])
+
+        # --- Voice controls ---
+        _voice = None
+        vcol1, vcol2 = st.columns([0.6, 0.4])
+        with vcol1:
+            try:
+                from streamlit_mic_recorder import speech_to_text
+                _voice = speech_to_text(language='en', start_prompt="🎤 Speak", stop_prompt="⏹ Stop",
+                                        just_once=True, use_container_width=True, key=f"stt::{ticker}")
+            except Exception:
+                st.caption("🎤 Voice input needs `streamlit-mic-recorder` (pip install -r requirements.txt).")
+        with vcol2:
+            _speak = st.toggle("🔊 Speak answers", key=f"speak::{ticker}")
+
         for _m in _hist:
             with st.chat_message(_m['role']):
                 st.markdown(_m['content'])
         if not _hist:
-            st.markdown('<div style="color:var(--muted); font-size:0.85rem;">Try: '
+            st.markdown('<div style="color:var(--muted); font-size:0.85rem;">Speak or type — e.g. '
                         '“Why only moderate conviction?” · “What would make this a buy?” · '
-                        '“Explain the moat score.” · “Biggest risks to the thesis?”</div>',
-                        unsafe_allow_html=True)
-        _prompt = st.chat_input(f"Ask about {ticker}…")
+                        '“Explain the moat score.”</div>', unsafe_allow_html=True)
+
+        _typed = st.chat_input(f"Ask about {ticker}…")
+        _prompt = _voice or _typed
         if _prompt:
             _hist.append({'role': 'user', 'content': _prompt})
             with st.chat_message('user'):
@@ -972,6 +987,15 @@ with tab_ask:
                     except Exception as e:
                         _ans = f"⚠️ Couldn't reach the model: {e}"
                 st.markdown(_ans)
+                if _speak and _ans and not _ans.startswith("⚠️"):
+                    try:
+                        from gtts import gTTS
+                        import io as _io
+                        _buf = _io.BytesIO()
+                        gTTS(_ans[:1200]).write_to_fp(_buf)
+                        st.audio(_buf.getvalue(), format="audio/mp3", autoplay=True)
+                    except Exception:
+                        pass
             _hist.append({'role': 'assistant', 'content': _ans})
         if _hist and st.button("Clear chat"):
             st.session_state[_chatkey] = []
