@@ -494,9 +494,27 @@ def _render_oversold_sectors(sectors_dict):
     st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
     st.caption(f"Screens {tracked} groups — the 11 broad GICS sectors plus granular industry/theme ETFs "
                "(SaaS, semis, biotech, cyber, fintech, banks, energy…). Showing the most beaten-down first; "
-               "groups in clear uptrends score ~0 and drop off. Oversold = low RSI / deep drawdown / below "
-               "the 200-day average. ‘Setup’ rewards washed-out readings starting to stabilise — not a buy "
-               "signal on its own.")
+               "groups in clear uptrends score ~0 and drop off.")
+    with st.expander("What each column means — and why these"):
+        st.markdown(
+            "The screen hunts for groups that are **stretched to the downside** *and* **starting to "
+            "turn** — the setup that mean-reversion rebounds tend to come from. Each column captures one "
+            "piece of that picture, so no single indicator carries the call:\n\n"
+            "| Column | What it is | Why it's here / how to read it |\n"
+            "|---|---|---|\n"
+            "| **Group** | The sector or industry, via its ETF proxy | What's being measured |\n"
+            "| **Type** | Broad GICS *Sector* vs granular *Industry / theme* | Scope — a whole sector vs a slice like SaaS or semis |\n"
+            "| **Status** | *Oversold* vs *Watch* | **Oversold** = genuinely washed-out (RSI < ~42 *or* >12% off the high); **Watch** = softening but not extreme |\n"
+            "| **RSI** | 14-day Relative Strength Index (momentum) | <30 deeply oversold · 30–45 soft · >70 overbought. The classic mean-reversion gauge |\n"
+            "| **Off 52-wk high** | % below the 1-year high | The *depth* of the selloff — how much has already been given back |\n"
+            "| **vs 200-day** | % above / below the 200-day average | *Trend* context. Well below = stretched / in a downtrend; reclaiming it is an early turn signal |\n"
+            "| **1w / 1m / 3m** | Trailing return over each window | The *stabilisation* check — still falling, or basing? A green **1w** after a red **3m** hints the bleeding has stopped |\n"
+            "| **Setup** | Composite rebound-setup score | Blends all of the above — rewards deep, below-trend, low-RSI readings that are **beginning to stabilise**. Higher = better setup; it ranks the list |\n\n"
+            "**Why these dimensions:** *depth* (off-high), *trend* (vs 200-day), *momentum* (RSI) and "
+            "*stabilisation* (1w/1m/3m) together answer two questions — **how beaten-down is it**, and "
+            "**is it turning yet?** The **Setup** score combines them so the best rebound candidates float "
+            "to the top. It's a research starting point that flags where to look — **not** a buy signal on "
+            "its own; a falling knife can stay oversold for a long time.")
     if st.button("Explain the rebound case (AI)"):
         key = _llm_key()
         if not key:
