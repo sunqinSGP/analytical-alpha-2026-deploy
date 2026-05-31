@@ -4,11 +4,25 @@ Operates on the 11 SPDR GICS sector ETFs as sector proxies. Feed a list of daily
 (oldest -> newest) to oversold_metrics(); fetching happens in the caller (run_screen.py).
 """
 
+# Broad GICS Level-1 sectors (the 11 SPDR sector ETFs).
 SECTORS = {
     'XLK': 'Technology', 'XLC': 'Communication Services', 'XLY': 'Consumer Discretionary',
     'XLP': 'Consumer Staples', 'XLE': 'Energy', 'XLF': 'Financials', 'XLV': 'Health Care',
     'XLI': 'Industrials', 'XLB': 'Materials', 'XLRE': 'Real Estate', 'XLU': 'Utilities',
 }
+
+# Granular industry / thematic ETFs — finer than GICS L1 so themes like SaaS, semis or
+# biotech surface on their own instead of being buried inside "Technology" or "Health Care".
+INDUSTRIES = {
+    'IGV': 'Software / SaaS', 'SKYY': 'Cloud Computing', 'CIBR': 'Cybersecurity',
+    'SMH': 'Semiconductors', 'XBI': 'Biotech', 'KRE': 'Regional Banks',
+    'FINX': 'Fintech', 'XOP': 'Oil & Gas E&P', 'TAN': 'Solar / Clean Energy',
+    'XHB': 'Homebuilders', 'XRT': 'Retail', 'ITA': 'Aerospace & Defense',
+}
+
+# Everything we track for the oversold/rebound screen, plus a group tag for the UI.
+ALL_SECTORS = {**SECTORS, **INDUSTRIES}
+GROUP = {**{s: 'Sector' for s in SECTORS}, **{s: 'Industry' for s in INDUSTRIES}}
 
 
 def rsi(closes, period=14):

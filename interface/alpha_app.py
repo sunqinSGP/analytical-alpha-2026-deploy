@@ -465,15 +465,18 @@ def _render_screen_tiers(rows, universe_count, skipped):
 
 
 def _render_oversold_sectors(sectors_dict):
-    ranked = sct.rank_oversold(sectors_dict, top=6)
-    st.markdown("#### Oversold sectors poised for rebound")
+    tracked = len(sectors_dict or {})
+    ranked = sct.rank_oversold(sectors_dict, top=12)
+    st.markdown("#### Oversold sectors & industries poised for rebound")
     if not ranked:
-        st.caption("No sectors are screening as oversold right now.")
+        st.caption("Nothing is screening as meaningfully oversold right now — most groups are at or "
+                   "above trend.")
         return
     rows = []
     for s in ranked:
         rows.append({
-            'Sector': s['name'],
+            'Group': s.get('name'),
+            'Type': s.get('group', 'Sector'),
             'Status': 'Oversold' if s.get('oversold') else 'Watch',
             'RSI': f"{s['rsi']:.0f}" if s.get('rsi') is not None else '—',
             'Off 52-wk high': f"{s['pct_off_52w_high']:.0f}%" if s.get('pct_off_52w_high') is not None else '—',
@@ -484,8 +487,11 @@ def _render_oversold_sectors(sectors_dict):
             'Setup': f"{s['rebound_score']:.0f}",
         })
     st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
-    st.caption("Oversold = low RSI / deep drawdown / below the 200-day average. ‘Setup’ rewards "
-               "washed-out readings that are starting to stabilise — not a buy signal on its own.")
+    st.caption(f"Screens {tracked} groups — the 11 broad GICS sectors plus granular industry/theme ETFs "
+               "(SaaS, semis, biotech, cyber, fintech, banks, energy…). Showing the most beaten-down first; "
+               "groups in clear uptrends score ~0 and drop off. Oversold = low RSI / deep drawdown / below "
+               "the 200-day average. ‘Setup’ rewards washed-out readings starting to stabilise — not a buy "
+               "signal on its own.")
     if st.button("Explain the rebound case (AI)"):
         key = _llm_key()
         if not key:
@@ -555,6 +561,94 @@ def render_screener():
         _render_screen_tiers(saved['results'], saved.get('universe', len(WATCHLIST)), saved.get('skipped', []))
     else:
         st.info("No saved scan yet — click **Scan now**, or the nightly job will populate it at 11pm.")
+
+
+# ===========================================================================
+# AI chat (shared by the landing "Ask AI" tab and the single-stock "Ask AI" tab)
+# ===========================================================================
+def render_ai_chat(chatkey, system_text, placeholder, starters, suffix):
+    """Shared chat UI: history + voice in/out + text input. `system_text` is the full system
+    prompt — either a string, or a no-arg callable resolved only when a message is sent (so an
+    expensive context build doesn't run on every rerun). `suffix` keeps widget keys unique."""
+    key = _llm_key()
+    if not key:
+        st.info("**Enable the assistant:** add a `deepseek_api_key` to your Streamlit secrets "
+                "(app → Settings → Secrets). Get a key at platform.deepseek.com — it's inexpensive.")
+        return
+    hist = st.session_state.setdefault(chatkey, [])
+
+    voice = None
+    vc1, vc2 = st.columns([0.6, 0.4])
+    with vc1:
+        try:
+            from streamlit_mic_recorder import speech_to_text
+            voice = speech_to_text(language='en', start_prompt="🎤 Speak", stop_prompt="⏹ Stop",
+                                   just_once=True, use_container_width=True, key=f"stt::{suffix}")
+        except Exception:
+            st.caption("🎤 Voice input needs `streamlit-mic-recorder` (pip install -r requirements.txt).")
+    with vc2:
+        speak = st.toggle("🔊 Speak answers", key=f"speak::{suffix}")
+
+    for m in hist:
+        with st.chat_message(m['role']):
+            st.markdown(m['content'])
+    if not hist:
+        st.markdown(f'<div style="color:var(--muted); font-size:0.85rem;">{starters}</div>',
+                    unsafe_allow_html=True)
+
+    prompt = voice or st.chat_input(placeholder)
+    if prompt:
+        hist.append({'role': 'user', 'content': prompt})
+        with st.chat_message('user'):
+            st.markdown(prompt)
+        with st.chat_message('assistant'):
+            with st.spinner("Thinking…"):
+                try:
+                    _sys = system_text() if callable(system_text) else system_text
+                    ans = ai.complete(key, hist, system=_sys, model=_llm_model())
+                except Exception as e:
+                    ans = f"⚠️ Couldn't reach the model: {e}"
+            st.markdown(ans)
+            if speak and ans and not ans.startswith("⚠️"):
+                try:
+                    from gtts import gTTS
+                    import io as _io
+                    _buf = _io.BytesIO()
+                    gTTS(ans[:1200]).write_to_fp(_buf)
+                    st.audio(_buf.getvalue(), format="audio/mp3", autoplay=True)
+                except Exception:
+                    pass
+        hist.append({'role': 'assistant', 'content': ans})
+    if hist and st.button("Clear chat", key=f"clear::{suffix}"):
+        st.session_state[chatkey] = []
+        st.rerun()
+
+
+def _market_context():
+    """Compact live snapshot to ground the landing chat: latest scan, oversold sectors, headlines."""
+    bits = []
+    saved = _load_saved_screen()
+    if saved:
+        bits.append(f"Latest internal scan: {saved.get('generated_human', '?')} — "
+                    f"{saved.get('analysed', 0)} names analysed.")
+        tops = [r for r in (saved.get('results') or []) if r.get('tier') in ('Platinum', 'Gold')][:18]
+        if tops:
+            bits.append("Top-tier screened names (ticker · sector · conviction): " +
+                        "; ".join(f"{r.get('ticker')} · {r.get('sector', '')} · {r.get('conviction', '')}"
+                                  for r in tops))
+        ranked = sct.rank_oversold(saved.get('sectors') or {}, top=12)
+        if ranked:
+            bits.append("Most oversold sectors / industries now (name · RSI · % off 52w high · 1m return): " +
+                        "; ".join(f"{s.get('name')} · RSI {s.get('rsi', '?')} · "
+                                  f"{s.get('pct_off_52w_high', '?')}% · {s.get('ret_1m', '?')}%"
+                                  for s in ranked))
+    try:
+        heads = [n['title'] for n in (cached_news() or [])[:25] if n.get('title')]
+        if heads:
+            bits.append("Recent market headlines: " + " | ".join(heads))
+    except Exception:
+        pass
+    return "\n".join(bits)
 
 
 # ===========================================================================
@@ -723,7 +817,21 @@ if not ticker:
     st.markdown("<br>", unsafe_allow_html=True)
     st.caption("Enter a ticker above for a single-stock deep dive — or work with your whole book below.")
 
-    tab_pf, tab_scr, tab_macro = st.tabs(["Portfolio", "Screener", "Macro"])
+    tab_ai, tab_scr, tab_macro, tab_pf = st.tabs(["Ask AI", "Screener", "Macro", "Portfolio"])
+
+    with tab_ai:
+        st.markdown("#### Ask the strategist")
+        st.caption("Ask about any sector, industry or theme — SaaS, semis, biotech, energy, banks — the "
+                   "macro backdrop, or what's screening well right now. Grounded in the app's latest scan "
+                   "and recent headlines. AI-generated, not financial advice.")
+        render_ai_chat(
+            "chat::market",
+            lambda: ai.market_chat_system(_market_context()),
+            "Ask about a sector, theme or the macro picture…",
+            "Try — “What's the latest view on the SaaS / software sector?” · "
+            "“Which oversold sectors look most interesting and why?” · "
+            "“How do higher-for-longer rates hit semis vs utilities?”",
+            "market")
 
     with tab_pf:
         st.markdown("#### Your portfolio")
@@ -1105,61 +1213,13 @@ with tab_mk:
 with tab_ask:
     st.caption("Speak or type to ask about this analysis — answers are grounded in the app's own "
                "numbers. AI-generated, informational, not financial advice.")
-    _key = _llm_key()
-    if not _key:
-        st.info("**Enable the assistant:** add a `deepseek_api_key` to your Streamlit secrets "
-                "(app → Settings → Secrets). Get a key at platform.deepseek.com — it's inexpensive.")
-    else:
-        _chatkey = f"chat::{ticker}"
-        _hist = st.session_state.setdefault(_chatkey, [])
-
-        # --- Voice controls ---
-        _voice = None
-        vcol1, vcol2 = st.columns([0.6, 0.4])
-        with vcol1:
-            try:
-                from streamlit_mic_recorder import speech_to_text
-                _voice = speech_to_text(language='en', start_prompt="🎤 Speak", stop_prompt="⏹ Stop",
-                                        just_once=True, use_container_width=True, key=f"stt::{ticker}")
-            except Exception:
-                st.caption("🎤 Voice input needs `streamlit-mic-recorder` (pip install -r requirements.txt).")
-        with vcol2:
-            _speak = st.toggle("🔊 Speak answers", key=f"speak::{ticker}")
-
-        for _m in _hist:
-            with st.chat_message(_m['role']):
-                st.markdown(_m['content'])
-        if not _hist:
-            st.markdown('<div style="color:var(--muted); font-size:0.85rem;">Speak or type — e.g. '
-                        '“Why only moderate conviction?” · “What would make this a buy?” · '
-                        '“Explain the moat score.”</div>', unsafe_allow_html=True)
-
-        _typed = st.chat_input(f"Ask about {ticker}…")
-        _prompt = _voice or _typed
-        if _prompt:
-            _hist.append({'role': 'user', 'content': _prompt})
-            with st.chat_message('user'):
-                st.markdown(_prompt)
-            with st.chat_message('assistant'):
-                with st.spinner("Thinking…"):
-                    try:
-                        _ans = ai.complete(_key, _hist, system=ai.stock_chat_system(result), model=_llm_model())
-                    except Exception as e:
-                        _ans = f"⚠️ Couldn't reach the model: {e}"
-                st.markdown(_ans)
-                if _speak and _ans and not _ans.startswith("⚠️"):
-                    try:
-                        from gtts import gTTS
-                        import io as _io
-                        _buf = _io.BytesIO()
-                        gTTS(_ans[:1200]).write_to_fp(_buf)
-                        st.audio(_buf.getvalue(), format="audio/mp3", autoplay=True)
-                    except Exception:
-                        pass
-            _hist.append({'role': 'assistant', 'content': _ans})
-        if _hist and st.button("Clear chat"):
-            st.session_state[_chatkey] = []
-            st.rerun()
+    render_ai_chat(
+        f"chat::{ticker}",
+        ai.stock_chat_system(result),
+        f"Ask about {ticker}…",
+        "Speak or type — e.g. “Why only moderate conviction?” · "
+        "“What would make this a buy?” · “Explain the moat score.”",
+        ticker)
 
 st.markdown("<hr>", unsafe_allow_html=True)
 st.caption(f"Not financial advice · Public data via Yahoo Finance · {datetime.now().strftime('%b %d, %Y %H:%M')} · "

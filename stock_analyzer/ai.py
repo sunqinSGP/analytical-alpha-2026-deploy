@@ -82,6 +82,28 @@ def stock_chat_system(result):
             "source and be explicit when you go beyond it:\n\n" + stock_context(result))
 
 
+# ---------------------------------------------------------------- general markets chat
+MARKET_PERSONA = (
+    "You are a markets and sector strategist inside an equity-analysis app. Help the user think about "
+    "sectors and industries — including granular ones such as software / SaaS, semiconductors, biotech, "
+    "cybersecurity, fintech, energy, banks — plus macro themes, rotations, and how they affect share "
+    "prices. Give a balanced read: the bull case, the bear case, and the main risks or what would change "
+    "your mind. Be specific and concise, prefer short structured answers, and name relevant tickers or "
+    "ETFs where useful. When live context from the app is supplied below, use it and say so; otherwise "
+    "answer from general knowledge and note that it is not real-time."
+)
+
+
+def market_chat_system(context=None):
+    """System prompt for the general (landing-page) markets chat, optionally grounded with a compact
+    live-context string (latest internal scan, oversold sectors, recent headlines)."""
+    base = GUARDRAIL + "\n\n" + MARKET_PERSONA
+    if context:
+        base += ("\n\n--- Live context from the app (current snapshot; partial — use where relevant "
+                 "and say when you do) ---\n" + context)
+    return base
+
+
 # ---------------------------------------------------------------- macro / news
 MACRO_INSTRUCTION = (
     "You are a macro strategist. From the recent market and sector news headlines below, assess the "

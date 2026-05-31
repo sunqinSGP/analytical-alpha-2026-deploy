@@ -210,6 +210,11 @@ _mm = ai.macro_messages([{'title': 'Fed holds rates steady', 'publisher': 'Reute
 check("macro_messages embeds the headline", 'Fed holds rates steady' in _mm[0]['content'])
 check("macro prompt requests structured JSON (tone/direction)",
       'json' in _mm[0]['content'].lower() and 'direction' in _mm[0]['content'].lower())
+_mcs = ai.market_chat_system("Most oversold now: Software / SaaS RSI 30")
+check("market_chat_system carries the not-advice guardrail", 'not financial advice' in _mcs.lower())
+check("market_chat_system injects live context when provided", 'Software / SaaS' in _mcs)
+check("market_chat_system works without context", isinstance(ai.market_chat_system(), str)
+      and 'strategist' in ai.market_chat_system().lower())
 
 
 def _empty_key_raises():
@@ -238,6 +243,12 @@ check("uptrend not flagged oversold", sct.oversold_metrics(_up)['oversold'] is F
 _ranked = sct.rank_oversold({'XLE': {'name': 'Energy', **_m},
                              'XLK': {'name': 'Technology', **sct.oversold_metrics(_up)}})
 check("rank_oversold returns only oversold sectors", [r['symbol'] for r in _ranked] == ['XLE'])
+check("granular industries are tracked (SaaS/semis/biotech)",
+      {'IGV', 'SMH', 'XBI'} <= set(sct.INDUSTRIES))
+check("ALL_SECTORS merges GICS sectors + industries",
+      len(sct.ALL_SECTORS) == len(sct.SECTORS) + len(sct.INDUSTRIES) and len(sct.ALL_SECTORS) > 20)
+check("every tracked group has a Sector/Industry tag",
+      all(sct.GROUP.get(s) in ('Sector', 'Industry') for s in sct.ALL_SECTORS))
 _sm = ai.sector_rebound_messages(_ranked, [{'title': 'Oil slumps on demand fears'}])
 check("sector rebound prompt embeds sector + headline",
       'Energy' in _sm[0]['content'] and 'Oil slumps' in _sm[0]['content'])

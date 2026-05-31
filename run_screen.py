@@ -46,15 +46,16 @@ def screen_one(tk):
 
 
 def screen_sectors():
-    """Oversold/rebound metrics for the 11 GICS sector ETFs (price-based, no LLM)."""
+    """Oversold/rebound metrics for the broad GICS sectors + granular industry/theme ETFs
+    (price-based, no LLM). Each entry carries a 'group' tag (Sector vs Industry)."""
     out = {}
-    for sym, name in sct.SECTORS.items():
+    for sym, name in sct.ALL_SECTORS.items():
         try:
             hist = _yf_ticker(sym).history(period='2y')
             if hist is not None and not hist.empty and 'Close' in hist.columns:
                 m = sct.oversold_metrics(hist['Close'].tolist())
                 if m:
-                    out[sym] = {'name': name, **m}
+                    out[sym] = {'name': name, 'group': sct.GROUP.get(sym, 'Sector'), **m}
         except Exception:
             pass
     return out
@@ -85,7 +86,7 @@ def main():
         rows.extend(retry_rows)
         print(f"  retry pass: +{len(retry_rows)} ok, {len(skipped)} still skipped", flush=True)
 
-    print("  scanning 11 sectors for oversold/rebound setups…", flush=True)
+    print(f"  scanning {len(sct.ALL_SECTORS)} sectors + industries for oversold/rebound setups…", flush=True)
     sector_data = screen_sectors()
     payload = {
         'generated_at': datetime.now().isoformat(timespec='seconds'),
