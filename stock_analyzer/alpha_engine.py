@@ -74,6 +74,62 @@ def _yf_ticker(ticker):
         return yf.Ticker(ticker)
 
 
+def _yahoo_search(query, count=6):
+    """Yahoo symbol-search endpoint, via the same browser-impersonating per-thread session.
+    Returns the raw 'quotes' list (symbol / shortname / quoteType / exchange…)."""
+    from curl_cffi import requests as _creq
+    sess = getattr(_session_tls, 'session', None)
+    if sess is None:
+        sess = _creq.Session(impersonate="chrome")
+        _session_tls.session = sess
+    r = sess.get("https://query2.finance.yahoo.com/v1/finance/search",
+                 params={'q': query, 'quotesCount': count, 'newsCount': 0}, timeout=8)
+    r.raise_for_status()
+    return r.json().get('quotes', []) or []
+
+
+# An unambiguous exchange-suffixed symbol (0700.HK, D05.SI, BABA.L) — safe to use as-is.
+_SUFFIXED_TICKER_RE = re.compile(r'^[A-Z0-9]{1,6}\.[A-Z]{1,4}$')
+
+
+def resolve_ticker(query, known=None):
+    """Resolve free text — a company NAME or a symbol — to a Yahoo ticker, so a user can type
+    'Tencent' and get 0700.HK.
+
+    Returns {'symbol', 'name', 'from_name', 'alternatives'} (or None for empty input).
+    Fast-paths obvious symbols (anything in `known`, or an exchange-suffixed ticker) with no
+    network call; otherwise runs Yahoo search and picks the best equity/ETF match, preferring an
+    exact symbol hit. Falls back to the literal uppercased input if search is unavailable, so it
+    can never make ticker entry worse than before.
+    """
+    q = (query or '').strip()
+    if not q:
+        return None
+    up = q.upper()
+    if (known and up in known) or _SUFFIXED_TICKER_RE.match(up):
+        return {'symbol': up, 'name': None, 'from_name': False, 'alternatives': []}
+    try:
+        quotes = _yahoo_search(q)
+    except Exception:
+        return {'symbol': up, 'name': None, 'from_name': False, 'alternatives': []}
+
+    def _nm(x):
+        return x.get('shortname') or x.get('longname') or ''
+
+    # An exact symbol match (the user typed a real ticker) always wins.
+    for x in quotes:
+        if (x.get('symbol') or '').upper() == up:
+            return {'symbol': x['symbol'], 'name': _nm(x), 'from_name': False, 'alternatives': []}
+    ranked = [x for x in quotes if x.get('symbol') and x.get('quoteType') in ('EQUITY', 'ETF')] \
+        or [x for x in quotes if x.get('symbol')]
+    if not ranked:
+        return {'symbol': up, 'name': None, 'from_name': False, 'alternatives': []}
+    best = ranked[0]
+    alts = [{'symbol': x['symbol'], 'name': _nm(x), 'exchange': x.get('exchange')} for x in ranked[1:4]]
+    return {'symbol': best['symbol'], 'name': _nm(best),
+            'from_name': best['symbol'].upper() != up, 'alternatives': alts}
+
+
 def fetch_alpha_data(ticker, retries=3):
     # Retry .info with a brief backoff (and a fresh impersonating session) — Yahoo often
     # returns empty info on the first hit from a blocked IP but succeeds on a retry.

@@ -15,7 +15,7 @@ import json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from stock_analyzer.alpha_engine import (
     alpha_analysis, fetch_alpha_data, format_market_cap, assign_screen_tier,
-    THEMES_2026, NoB_TYPES,
+    THEMES_2026, NoB_TYPES, resolve_ticker,
 )
 from stock_analyzer.verdict import CONV_COLORS, build_factor_attribution, recommendation_for
 from stock_analyzer import portfolio as pf
@@ -69,6 +69,13 @@ def _llm_model():
         return st.secrets.get("llm_model") or ai.DEFAULT_MODEL
     except Exception:
         return ai.DEFAULT_MODEL
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def cached_resolve(query):
+    """Resolve a typed name/symbol to a Yahoo ticker (cached a day). known=universe fast-paths
+    our tracked symbols without a network call."""
+    return resolve_ticker(query, known=set(WATCHLIST))
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -515,6 +522,31 @@ def _render_oversold_sectors(sectors_dict):
             "**is it turning yet?** The **Setup** score combines them so the best rebound candidates float "
             "to the top. It's a research starting point that flags where to look — **not** a buy signal on "
             "its own; a falling knife can stay oversold for a long time.")
+    with st.expander("Setup score — how each number is built"):
+        st.markdown(
+            "**Setup = RSI depth + Drawdown + Below-200-day + two stabilisation bonuses.** Every point is "
+            "traceable:\n\n"
+            "- **RSI depth** — `max(0, 45 − RSI) × 1.1` · rewards a low RSI; contributes 0 once RSI ≥ 45\n"
+            "- **Drawdown** — `(% off the 52-wk high) × 0.6` · rewards a deeper fall\n"
+            "- **Below 200-day** — `(% below the 200-day) × 0.5`, capped at 15 · rewards being stretched below trend\n"
+            "- **Week-up bonus** — `+12` if the group is genuinely pulled back (the three above sum to ≥ 8) "
+            "**and** last week is up\n"
+            "- **Decelerating bonus** — `+10` if pulled back **and** the 1-month decline is shallower than a "
+            "third of the 3-month (the fall is slowing)\n\n"
+            "The bonuses only fire once a group is actually washed out, so an uptrend can't earn them. "
+            "Per-group contributions (sums to the **Setup** column):")
+        bd_rows = []
+        for s in ranked:
+            comps, total = sct.rebound_score_breakdown(s)
+            d = {c['component']: c['points'] for c in comps}
+            bd_rows.append({
+                'Group': s.get('name'),
+                'RSI depth': d.get('RSI depth'), 'Drawdown': d.get('Drawdown'),
+                'Below 200-day': d.get('Below 200-day'),
+                'Week-up': d.get('Week-up bonus'), 'Decel.': d.get('Decelerating bonus'),
+                'Setup total': total,
+            })
+        st.dataframe(pd.DataFrame(bd_rows), hide_index=True, width='stretch')
     if st.button("Explain the rebound case (AI)"):
         key = _llm_key()
         if not key:
@@ -796,10 +828,19 @@ st.markdown("""
 
 c1, c2, c3 = st.columns([0.5, 0.28, 0.22])
 with c1:
-    ticker = st.text_input(
-        "Ticker", placeholder="AAPL · NVDA · 3323.HK · D05.SI",
-        help="Enter a stock symbol to analyse. Foreign listings use Yahoo suffixes (.HK Hong Kong, .SI Singapore, .L London…).",
-    ).upper().strip()
+    _raw = st.text_input(
+        "Company or ticker", placeholder="Tencent · AAPL · 3323.HK · DBS",
+        help="Type a company name OR a symbol — e.g. 'Tencent' resolves to 0700.HK, 'apple' to AAPL. "
+             "Foreign listings also work directly via Yahoo suffixes (.HK Hong Kong, .SI Singapore, .L London…).",
+    ).strip()
+    ticker, _resolve_info = '', None
+    if _raw:
+        _res = cached_resolve(_raw)
+        if _res and _res.get('symbol'):
+            ticker = _res['symbol'].upper()
+            _resolve_info = _res if _res.get('from_name') else None
+        else:
+            ticker = _raw.upper()
 with c2:
     framework_options = ['Auto-detect framework'] + [v['name'] for v in NoB_TYPES.values()]
     framework_choice = st.selectbox(
@@ -811,6 +852,14 @@ with c3:
         "Your position % (optional)", 0.0, 100.0, 0.0, 0.5,
         help="Your current holding in this stock as a % of your portfolio. Tailors the sizing advice — e.g. flags TRIM when you're over the risk-based cap. Leave at 0 to just see the suggested max.",
     )
+
+if _resolve_info:
+    _nm = _resolve_info.get('name') or ''
+    _alts = [a.get('symbol') for a in (_resolve_info.get('alternatives') or []) if a.get('symbol')]
+    _msg = f"Interpreted “{_raw}” as **{ticker}**" + (f" — {_nm}" if _nm else "")
+    if _alts:
+        _msg += "  ·  not right? try: " + ", ".join(_alts)
+    st.caption(_msg)
 
 
 # ===========================================================================

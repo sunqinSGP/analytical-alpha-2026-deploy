@@ -61,22 +61,9 @@ def oversold_metrics(closes):
     pct_vs_200 = (last / ma200 - 1) * 100 if ma200 else None
     ret_1w, ret_1m, ret_3m = ret(5), ret(21), ret(63)
 
-    # Rebound-setup score: reward being oversold (low RSI, deep drawdown, below 200dma)
-    # AND showing signs of stabilising (recent week up; 1-month decline shallower than 3-month).
-    base = 0.0
-    if r is not None:
-        base += max(0.0, 45 - r) * 1.1
-    base += max(0.0, -pct_off_high) * 0.6
-    if pct_vs_200 is not None and pct_vs_200 < 0:
-        base += min(15.0, -pct_vs_200 * 0.5)
-    score = base
-    # Stabilisation bonus only for sectors that are ACTUALLY pulled back — otherwise a
-    # rising sector (recent week up, decline shallow) would score like a rebound setup.
-    if base >= 8.0:
-        if ret_1w is not None and ret_1w > 0:
-            score += 12.0
-        if ret_1m is not None and ret_3m is not None and ret_1m > ret_3m / 3:
-            score += 10.0
+    # Rebound-setup score — _score_components() is the single source of truth (shared with the
+    # UI breakdown), so the displayed components always reconcile with this total.
+    score = sum(pts for _, pts in _score_components(r, pct_off_high, pct_vs_200, ret_1w, ret_1m, ret_3m))
 
     oversold = (r is not None and r < 42) or pct_off_high < -12
 
@@ -88,6 +75,39 @@ def oversold_metrics(closes):
         'ret_1w': rnd(ret_1w), 'ret_1m': rnd(ret_1m), 'ret_3m': rnd(ret_3m),
         'rebound_score': round(score, 1), 'oversold': bool(oversold),
     }
+
+
+def _score_components(rsi_v, pct_off_high, pct_vs_200, ret_1w, ret_1m, ret_3m):
+    """The additive pieces of the rebound Setup score. Single source of truth, shared by
+    oversold_metrics() (the total) and rebound_score_breakdown() (the per-piece UI table).
+    Returns a list of (label, points)."""
+    rsi_pts = max(0.0, 45 - rsi_v) * 1.1 if rsi_v is not None else 0.0
+    dd_pts = max(0.0, -pct_off_high) * 0.6 if pct_off_high is not None else 0.0
+    b200_pts = min(15.0, -pct_vs_200 * 0.5) if (pct_vs_200 is not None and pct_vs_200 < 0) else 0.0
+    # The two stabilisation bonuses only fire once a group is actually pulled back (the three
+    # technical pieces sum to >= 8), so a healthy uptrend can't rack up a high score.
+    pulled_back = (rsi_pts + dd_pts + b200_pts) >= 8.0
+    wk = 12.0 if (pulled_back and ret_1w is not None and ret_1w > 0) else 0.0
+    dec = 10.0 if (pulled_back and ret_1m is not None and ret_3m is not None and ret_1m > ret_3m / 3) else 0.0
+    return [('RSI depth', rsi_pts), ('Drawdown', dd_pts), ('Below 200-day', b200_pts),
+            ('Week-up bonus', wk), ('Decelerating bonus', dec)]
+
+
+def rebound_score_breakdown(m):
+    """Per-component contributions to one group's Setup score, recomputed from its stored
+    metrics so every number in the table is traceable. Returns (rows, total) where each row is
+    {component, points, detail}."""
+    rsi_v, off, vs200 = m.get('rsi'), m.get('pct_off_52w_high'), m.get('pct_vs_200dma')
+    comps = _score_components(rsi_v, off, vs200, m.get('ret_1w'), m.get('ret_1m'), m.get('ret_3m'))
+    details = {
+        'RSI depth': (f"max(0, 45 − {rsi_v:.0f}) × 1.1" if rsi_v is not None else "—"),
+        'Drawdown': (f"{-off:.0f}% off high × 0.6" if off is not None else "—"),
+        'Below 200-day': (f"{-vs200:.0f}% below × 0.5 (cap 15)" if (vs200 is not None and vs200 < 0) else "at/above 200-day"),
+        'Week-up bonus': "+12 · pulled back & last week up",
+        'Decelerating bonus': "+10 · pulled back & 1m fall < ⅓ of 3m",
+    }
+    rows = [{'component': lbl, 'points': round(pts, 1), 'detail': details.get(lbl, '')} for lbl, pts in comps]
+    return rows, round(sum(pts for _, pts in comps), 1)
 
 
 def rank_oversold(sector_data, top=6, min_score=2.0):

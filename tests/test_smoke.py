@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from stock_analyzer.alpha_engine import (
     alpha_analysis, dividend_yield_pct, format_market_cap,
     assess_conviction, assign_screen_tier, forward_rule_of_40,
-    net_revenue_retention_estimate, NoB_TYPES,
+    net_revenue_retention_estimate, NoB_TYPES, resolve_ticker,
 )
 from stock_analyzer.verdict import build_factor_attribution, recommendation_for
 from stock_analyzer import portfolio as pf
@@ -243,6 +243,16 @@ check("uptrend not flagged oversold", sct.oversold_metrics(_up)['oversold'] is F
 _ranked = sct.rank_oversold({'XLE': {'name': 'Energy', **_m},
                              'XLK': {'name': 'Technology', **sct.oversold_metrics(_up)}})
 check("rank_oversold returns only oversold sectors", [r['symbol'] for r in _ranked] == ['XLE'])
+_bd, _bdt = sct.rebound_score_breakdown({'rsi': 30, 'pct_off_52w_high': -20, 'pct_vs_200dma': -10,
+                                         'ret_1w': 2, 'ret_1m': -3, 'ret_3m': -15})
+check("rebound_score_breakdown returns the five components", len(_bd) == 5)
+check("rebound_score_breakdown total equals the sum of its parts",
+      abs(_bdt - sum(c['points'] for c in _bd)) < 0.05)
+_mb = sct.oversold_metrics(_down)
+check("breakdown reconciles with the stored Setup score",
+      abs(sct.rebound_score_breakdown(_mb)[1] - _mb['rebound_score']) < 0.6)
+check("score components: an uptrend earns no stabilisation bonus",
+      dict(sct._score_components(70, -3, 5, 4, 4, 4)).get('Week-up bonus') == 0.0)
 check("status_label: deep drawdown + recovered RSI reads 'Rebounding', not 'Oversold'",
       sct.status_label({'rsi': 62, 'pct_off_52w_high': -25, 'ret_1w': 5.8}) == 'Rebounding')
 check("status_label: low RSI reads 'Oversold'",
@@ -251,6 +261,12 @@ check("status_label: deep drawdown still-weak RSI reads 'Oversold'",
       sct.status_label({'rsi': 45, 'pct_off_52w_high': -20}) == 'Oversold')
 check("status_label: shallow + healthy reads 'Watch'",
       sct.status_label({'rsi': 56, 'pct_off_52w_high': -5}) == 'Watch')
+# resolve_ticker — offline fast paths only (no network in CI)
+check("resolve_ticker passes an exchange-suffixed symbol straight through",
+      resolve_ticker('0700.HK')['symbol'] == '0700.HK' and resolve_ticker('0700.HK')['from_name'] is False)
+check("resolve_ticker fast-paths a known symbol without a lookup",
+      resolve_ticker('aapl', known={'AAPL'})['symbol'] == 'AAPL')
+check("resolve_ticker returns None on empty input", resolve_ticker('   ') is None)
 check("granular industries are tracked (SaaS/semis/biotech)",
       {'IGV', 'SMH', 'XBI'} <= set(sct.INDUSTRIES))
 check("ALL_SECTORS merges GICS sectors + industries",
