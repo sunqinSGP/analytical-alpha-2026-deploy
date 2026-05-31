@@ -658,7 +658,13 @@ def render_watchlist():
         st.info("No names yet. Add one above, or open any stock and click **☆ Watch**. "
                 "Your list is saved locally and persists between sessions.")
         return
-    st.caption(f"{len(wlist)} names · saved locally · **Analyze** opens one, **✕** removes it.")
+
+    cap, sc = st.columns([0.6, 0.4])
+    with cap:
+        st.caption(f"{len(wlist)} names · saved locally · **Analyze** opens one, **✕** removes it.")
+    with sc:
+        sort_by = st.selectbox("Sort by", ['Added', 'Conviction', 'Moat', "Today's move", 'Name'],
+                               key='wl_sort', label_visibility="collapsed")
 
     from concurrent.futures import ThreadPoolExecutor
 
@@ -667,10 +673,15 @@ def render_watchlist():
             r = cached_analysis(t, 0, None)
             if 'error' in r:
                 return {'ticker': t, 'error': True}
-            return {'ticker': t, 'name': r['data']['name'], 'price': r['data']['price'],
+            info = r['data'].get('info', {}) or {}
+            prev = info.get('regularMarketPreviousClose') or info.get('previousClose')
+            px = r['data']['price']
+            day = ((px / prev - 1) * 100) if (prev and px) else None
+            return {'ticker': t, 'name': r['data']['name'], 'price': px,
                     'ccy': detect_currency(t), 'conviction': r['thesis']['conviction'],
                     'moat': r['qualitative']['moat']['moat_rating'],
-                    'risk': r['risk_management']['risk_factors']['risk_level'], 'nob': r['nob']['name']}
+                    'risk': r['risk_management']['risk_factors']['risk_level'],
+                    'nob': r['nob']['name'], 'day': day}
         except Exception:
             return {'ticker': t, 'error': True}
 
@@ -678,7 +689,24 @@ def render_watchlist():
         with ThreadPoolExecutor(max_workers=8) as ex:
             metrics = {m['ticker']: m for m in ex.map(_one, wlist)}
 
-    for t in wlist:
+    # Best-first ordering; rows with no data always sink to the bottom.
+    CONV_RANK = {'HIGH CONVICTION': 0, 'MODERATE CONVICTION': 1, 'SELECTIVE': 2, 'OPPORTUNISTIC': 3, 'PASS': 4}
+
+    def _sort_key(t):
+        m = metrics.get(t, {})
+        err = bool(m.get('error'))
+        if sort_by == 'Conviction':
+            return (err, CONV_RANK.get(m.get('conviction'), 9), t)
+        if sort_by == 'Moat':
+            return (err, -(m.get('moat') or 0), t)
+        if sort_by == "Today's move":
+            d = m.get('day')
+            return (err, d is None, -(d if d is not None else 0), t)
+        if sort_by == 'Name':
+            return (err, t)
+        return (err,)  # 'Added' — stable sort preserves the saved order
+
+    for t in sorted(wlist, key=_sort_key):
         m = metrics.get(t, {'ticker': t, 'error': True})
         row = st.columns([0.74, 0.16, 0.10])
         with row[0]:
@@ -689,11 +717,19 @@ def render_watchlist():
                 cc = CURRENCY_SYMBOLS.get(m['ccy'], '$')
                 conv_color = CONV_COLORS.get(m['conviction'], 'var(--muted)')
                 price = f"{cc}{m['price']:,.2f}" if m['price'] else "—"
+                day = m.get('day')
+                if day is not None:
+                    dcol = 'var(--pos)' if day >= 0 else 'var(--neg)'
+                    day_html = (f"<span style='color:{dcol}; font-weight:600; font-size:0.82rem;'>"
+                                f"{'▲' if day >= 0 else '▼'} {abs(day):.1f}% today</span>")
+                else:
+                    day_html = ""
                 st.markdown(
                     "<div style='display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;'>"
                     f"<span style='font-weight:700;'>{m['ticker']}</span>"
-                    f"<span style='color:var(--muted); font-size:0.85rem;'>{m['name'][:30]}</span>"
+                    f"<span style='color:var(--muted); font-size:0.85rem;'>{m['name'][:28]}</span>"
                     f"<span style='color:{conv_color}; font-weight:600; font-size:0.82rem;'>{m['conviction'].title()}</span>"
+                    f"{day_html}"
                     f"<span style='color:var(--faint); font-size:0.82rem;'>{price} · moat {m['moat']:.1f}/10 · "
                     f"{m['risk']} risk · {m['nob']}</span></div>", unsafe_allow_html=True)
         if row[1].button("Analyze", key=f"wl_go_{t}", use_container_width=True):
