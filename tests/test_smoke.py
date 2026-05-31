@@ -18,6 +18,7 @@ from stock_analyzer.verdict import build_factor_attribution, recommendation_for
 from stock_analyzer import portfolio as pf
 from stock_analyzer import ai
 from stock_analyzer import news as newsmod
+from stock_analyzer import sectors as sct
 
 PASS, FAIL = 0, 0
 
@@ -221,6 +222,23 @@ check("complete() rejects an empty API key", _empty_key_raises())
 check("news parses the legacy schema", newsmod._normalize({'title': 'A', 'publisher': 'P'})['title'] == 'A')
 check("news parses the nested-content schema",
       newsmod._normalize({'content': {'title': 'B', 'provider': {'displayName': 'Q'}}})['title'] == 'B')
+
+print("\n[11] Sector oversold / rebound math")
+_down = [100 - i * 0.25 for i in range(220)] + [45, 45.5, 46, 46.2]   # deep decline, ticking up
+_up = [50 + i * 0.2 for i in range(220)]                              # steady uptrend
+check("RSI low on a decline", sct.rsi(_down) is not None and sct.rsi(_down) < 45)
+check("RSI high on an uptrend", sct.rsi(_up) is not None and sct.rsi(_up) > 60)
+_m = sct.oversold_metrics(_down)
+check("declining sector flagged oversold", _m['oversold'] is True)
+check("oversold metrics include drawdown + setup score",
+      _m['pct_off_52w_high'] < -10 and _m['rebound_score'] > 0)
+check("uptrend not flagged oversold", sct.oversold_metrics(_up)['oversold'] is False)
+_ranked = sct.rank_oversold({'XLE': {'name': 'Energy', **_m},
+                             'XLK': {'name': 'Technology', **sct.oversold_metrics(_up)}})
+check("rank_oversold returns only oversold sectors", [r['symbol'] for r in _ranked] == ['XLE'])
+_sm = ai.sector_rebound_messages(_ranked, [{'title': 'Oil slumps on demand fears'}])
+check("sector rebound prompt embeds sector + headline",
+      'Energy' in _sm[0]['content'] and 'Oil slumps' in _sm[0]['content'])
 
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 sys.exit(1 if FAIL else 0)

@@ -13,8 +13,9 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from stock_analyzer.alpha_engine import alpha_analysis, assign_screen_tier
+from stock_analyzer.alpha_engine import alpha_analysis, assign_screen_tier, _yf_ticker
 from stock_analyzer.universe import WATCHLIST
+from stock_analyzer import sectors as sct
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'screen_results.json')
 
@@ -44,6 +45,21 @@ def screen_one(tk):
         return None
 
 
+def screen_sectors():
+    """Oversold/rebound metrics for the 11 GICS sector ETFs (price-based, no LLM)."""
+    out = {}
+    for sym, name in sct.SECTORS.items():
+        try:
+            hist = _yf_ticker(sym).history(period='2y')
+            if hist is not None and not hist.empty and 'Close' in hist.columns:
+                m = sct.oversold_metrics(hist['Close'].tolist())
+                if m:
+                    out[sym] = {'name': name, **m}
+        except Exception:
+            pass
+    return out
+
+
 def _scan(tickers, workers):
     rows, skipped = [], []
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -69,11 +85,14 @@ def main():
         rows.extend(retry_rows)
         print(f"  retry pass: +{len(retry_rows)} ok, {len(skipped)} still skipped", flush=True)
 
+    print("  scanning 11 sectors for oversold/rebound setups…", flush=True)
+    sector_data = screen_sectors()
     payload = {
         'generated_at': datetime.now().isoformat(timespec='seconds'),
         'generated_human': datetime.now().strftime('%d %b %Y, %H:%M'),
         'universe': len(WATCHLIST), 'analysed': len(rows),
         'skipped': skipped, 'results': rows,
+        'sectors': sector_data,
     }
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, 'w', encoding='utf-8') as f:

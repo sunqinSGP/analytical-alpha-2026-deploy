@@ -19,7 +19,7 @@ from stock_analyzer.alpha_engine import (
 )
 from stock_analyzer.verdict import CONV_COLORS, build_factor_attribution, recommendation_for
 from stock_analyzer import portfolio as pf
-from stock_analyzer import ai, news
+from stock_analyzer import ai, news, sectors as sct
 
 st.set_page_config(page_title="Analytical Alpha 2026", page_icon="◆",
                    layout="wide", initial_sidebar_state="collapsed")
@@ -79,6 +79,12 @@ def cached_news():
 @st.cache_data(ttl=3600, show_spinner=False)
 def cached_macro(api_key, model, titles):
     return ai.summarize_macro(api_key, [{'title': t} for t in titles], model=model)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_sector_explain(api_key, model, sectors_json, news_titles):
+    oversold = json.loads(sectors_json)
+    return ai.explain_sector_rebound(api_key, oversold, [{'title': t} for t in news_titles], model=model)
 
 
 # ===========================================================================
@@ -360,6 +366,44 @@ def _render_screen_tiers(rows, universe_count, skipped):
     st.caption("*Rev retention is a total-revenue proxy, not true cohort NRR.")
 
 
+def _render_oversold_sectors(sectors_dict):
+    ranked = sct.rank_oversold(sectors_dict, top=6)
+    st.markdown("#### Oversold sectors poised for rebound")
+    if not ranked:
+        st.caption("No sectors are screening as oversold right now.")
+        return
+    rows = []
+    for s in ranked:
+        rows.append({
+            'Sector': s['name'],
+            'Status': 'Oversold' if s.get('oversold') else 'Watch',
+            'RSI': f"{s['rsi']:.0f}" if s.get('rsi') is not None else '—',
+            'Off 52-wk high': f"{s['pct_off_52w_high']:.0f}%" if s.get('pct_off_52w_high') is not None else '—',
+            'vs 200-day': f"{s['pct_vs_200dma']:+.0f}%" if s.get('pct_vs_200dma') is not None else '—',
+            '1w': f"{s['ret_1w']:+.1f}%" if s.get('ret_1w') is not None else '—',
+            '1m': f"{s['ret_1m']:+.1f}%" if s.get('ret_1m') is not None else '—',
+            '3m': f"{s['ret_3m']:+.1f}%" if s.get('ret_3m') is not None else '—',
+            'Setup': f"{s['rebound_score']:.0f}",
+        })
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
+    st.caption("Oversold = low RSI / deep drawdown / below the 200-day average. ‘Setup’ rewards "
+               "washed-out readings that are starting to stabilise — not a buy signal on its own.")
+    if st.button("Explain the rebound case (AI)"):
+        key = _llm_key()
+        if not key:
+            st.info("Add a `deepseek_api_key` to your secrets to enable the AI explanation.")
+        else:
+            try:
+                with st.spinner("Reasoning through the setups…"):
+                    _news = cached_news()
+                    _txt = cached_sector_explain(key, _llm_model(), json.dumps(ranked),
+                                                 tuple(n['title'] for n in _news))
+                st.markdown(_txt)
+                st.caption("AI-generated · informational, not financial advice.")
+            except Exception as e:
+                st.error(f"Couldn't reach the model: {e}")
+
+
 def render_screener():
     saved = _load_saved_screen()
     cc = st.columns([0.62, 0.38])
@@ -373,6 +417,10 @@ def render_screener():
                        "Platinum / Gold / Silver tiers. A nightly job keeps this current.")
     with cc[1]:
         live = st.button(f"Scan now ({len(WATCHLIST)})", type="primary", use_container_width=True)
+
+    if saved and saved.get('sectors'):
+        _render_oversold_sectors(saved['sectors'])
+        st.markdown("---")
 
     if live:
         from concurrent.futures import ThreadPoolExecutor, as_completed

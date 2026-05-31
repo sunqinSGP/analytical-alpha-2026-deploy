@@ -105,3 +105,36 @@ def macro_messages(news_items):
 
 def summarize_macro(api_key, news_items, model=DEFAULT_MODEL):
     return complete(api_key, macro_messages(news_items), model=model, max_tokens=1100, temperature=0.4)
+
+
+# ---------------------------------------------------------------- oversold sector rebound
+SECTOR_REBOUND_INSTRUCTION = (
+    "You are a sector strategist. Below are sector ETFs that screen as OVERSOLD on price technicals "
+    "(RSI, drawdown from the 52-week high, distance below the 200-day average, recent stabilisation), "
+    "most washed-out first, plus recent market headlines. For each sector, in 2-4 sentences give: "
+    "(1) the likely REASON it sold off, and (2) the BULL CASE for a near-term rebound, plus the main "
+    "RISK to that view. Be balanced and specific, and tie to the headlines where relevant. Reply in "
+    "Markdown — a one-line market context first, then a short section per sector. This is informational "
+    "analysis, not financial advice."
+)
+
+
+def sector_rebound_messages(oversold_sectors, news_items):
+    lines = []
+    for s in oversold_sectors:
+        lines.append(
+            f"- {s.get('name', s.get('symbol'))} ({s.get('symbol')}): RSI {s.get('rsi')}, "
+            f"{s.get('pct_off_52w_high')}% off 52-wk high, {s.get('pct_vs_200dma')}% vs 200-day MA, "
+            f"returns 1w {s.get('ret_1w')}% / 1m {s.get('ret_1m')}% / 3m {s.get('ret_3m')}%")
+    secs = "\n".join(lines) if lines else "(no oversold sectors)"
+    heads = "\n".join(f"- {(n.get('title') or '').strip()}"
+                      for n in (news_items or [])[:40] if n.get('title'))
+    content = SECTOR_REBOUND_INSTRUCTION + "\n\nOversold sectors (most washed-out first):\n" + secs
+    if heads:
+        content += "\n\nRecent market headlines:\n" + heads
+    return [{"role": "user", "content": content}]
+
+
+def explain_sector_rebound(api_key, oversold_sectors, news_items, model=DEFAULT_MODEL):
+    return complete(api_key, sector_rebound_messages(oversold_sectors, news_items),
+                    model=model, max_tokens=1300, temperature=0.4)
