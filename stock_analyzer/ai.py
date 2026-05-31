@@ -5,6 +5,7 @@ No Streamlit here, and the `openai` SDK is imported lazily inside _client(), so 
 prompt builders are unit-testable without a key or the SDK installed. The API key is
 always supplied by the caller (read from Streamlit secrets in the UI) — never hard-coded.
 """
+import json
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-chat"
@@ -24,13 +25,16 @@ def _client(api_key, base_url=DEEPSEEK_BASE_URL):
 
 
 def complete(api_key, messages, system=None, model=DEFAULT_MODEL, max_tokens=900,
-             temperature=0.3, base_url=DEEPSEEK_BASE_URL):
-    """Call chat-completions and return the assistant text. Raises on failure (caller handles)."""
+             temperature=0.3, base_url=DEEPSEEK_BASE_URL, json_mode=False):
+    """Call chat-completions and return the assistant text. Raises on failure (caller handles).
+    json_mode=True asks the model for a strict JSON object (OpenAI-compatible response_format)."""
     if not api_key:
         raise ValueError("No API key provided.")
     msgs = ([{"role": "system", "content": system}] if system else []) + list(messages)
-    resp = _client(api_key, base_url).chat.completions.create(
-        model=model, messages=msgs, max_tokens=max_tokens, temperature=temperature)
+    kwargs = dict(model=model, messages=msgs, max_tokens=max_tokens, temperature=temperature)
+    if json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+    resp = _client(api_key, base_url).chat.completions.create(**kwargs)
     return (resp.choices[0].message.content or "").strip()
 
 
@@ -80,13 +84,19 @@ def stock_chat_system(result):
 
 # ---------------------------------------------------------------- macro / news
 MACRO_INSTRUCTION = (
-    "You are a macro strategist. Below are recent market and sector news headlines. "
-    "Summarise the likely NEAR-TERM (days to a few weeks) impact on share prices BY SECTOR. "
-    "Only include sectors with a genuine signal in the headlines. For each, give: the sector name, "
-    "a direction tag (Positive / Negative / Mixed), one or two sentences of rationale tied to the "
-    "headlines, and any notable tickers. Begin with a single line on overall market tone. "
-    "Be balanced, call out the main uncertainties, and keep it tight. Reply in Markdown with no "
-    "preamble. This is informational analysis, not financial advice."
+    "You are a macro strategist. From the recent market and sector news headlines below, assess the "
+    "likely NEAR-TERM (days to a few weeks) impact on share prices BY SECTOR. "
+    "Respond with ONLY a JSON object (no prose, no markdown, no code fence) of this exact shape:\n"
+    '{\n'
+    '  "market_tone": "<one sentence on the overall market tone>",\n'
+    '  "sectors": [\n'
+    '    {"name": "<sector name>", "direction": "Positive" | "Negative" | "Mixed", '
+    '"rationale": "<one or two sentences tied to the headlines>", "tickers": ["TICK", "..."]}\n'
+    '  ],\n'
+    '  "uncertainties": [ {"title": "<short label>", "detail": "<one sentence>"} ]\n'
+    '}\n'
+    "Only include sectors with a genuine signal in the headlines (aim for 3-6). Keep each rationale "
+    "tight. Be balanced. This is informational analysis, not financial advice."
 )
 
 
@@ -104,7 +114,18 @@ def macro_messages(news_items):
 
 
 def summarize_macro(api_key, news_items, model=DEFAULT_MODEL):
-    return complete(api_key, macro_messages(news_items), model=model, max_tokens=1100, temperature=0.4)
+    """Return a structured dict the UI can style:
+    {market_tone, sectors:[{name, direction, rationale, tickers}], uncertainties:[{title, detail}]}.
+    Falls back to {'_raw': <text>} if the model doesn't return valid JSON."""
+    raw = complete(api_key, macro_messages(news_items), model=model,
+                   max_tokens=1400, temperature=0.4, json_mode=True)
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and ('sectors' in data or 'market_tone' in data):
+            return data
+    except Exception:
+        pass
+    return {'_raw': raw}
 
 
 # ---------------------------------------------------------------- oversold sector rebound

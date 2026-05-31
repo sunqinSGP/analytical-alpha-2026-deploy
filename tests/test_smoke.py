@@ -208,6 +208,8 @@ check("chat system prompt carries the not-advice guardrail",
       'not financial advice' in ai.stock_chat_system(_res).lower())
 _mm = ai.macro_messages([{'title': 'Fed holds rates steady', 'publisher': 'Reuters'}])
 check("macro_messages embeds the headline", 'Fed holds rates steady' in _mm[0]['content'])
+check("macro prompt requests structured JSON (tone/direction)",
+      'json' in _mm[0]['content'].lower() and 'direction' in _mm[0]['content'].lower())
 
 
 def _empty_key_raises():

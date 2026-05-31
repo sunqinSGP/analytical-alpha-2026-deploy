@@ -240,6 +240,55 @@ def pill(text, kind=''):
     return f'<span class="pill {kind}">{text}</span>'
 
 
+_DIR_KIND = {'positive': 'pos', 'negative': 'neg', 'mixed': 'amber',
+             'bullish': 'pos', 'bearish': 'neg', 'neutral': 'amber'}
+_DIR_ARROW = {'pos': '▲', 'neg': '▼', 'amber': '◆'}
+
+
+def render_macro(data):
+    """Render the structured macro read: an overall-tone callout, one card per sector with a
+    colour-coded direction badge (green ▲ / red ▼ / amber ◆) + ticker chips, then key
+    uncertainties. Falls back to plain text if the model didn't return structured JSON."""
+    if not isinstance(data, dict) or data.get('_raw') is not None:
+        st.markdown(data.get('_raw', '') if isinstance(data, dict) else str(data))
+        return
+
+    tone = (data.get('market_tone') or '').strip()
+    if tone:
+        st.markdown(
+            '<div class="card" style="border-left:4px solid var(--accent);">'
+            '<div class="sectlabel" style="margin:0 0 4px 0;">Overall market tone</div>'
+            f'<div style="font-size:1.0rem; font-weight:600; color:var(--ink); line-height:1.5;">{tone}</div>'
+            '</div>', unsafe_allow_html=True)
+
+    for s in (data.get('sectors') or []):
+        name = (s.get('name') or '').strip()
+        direction = (s.get('direction') or 'Mixed').strip()
+        kind = _DIR_KIND.get(direction.lower(), 'amber')
+        badge = pill(f'{_DIR_ARROW[kind]} {direction}', kind)
+        rationale = (s.get('rationale') or '').strip()
+        chips = ' '.join(pill(str(t).strip()) for t in (s.get('tickers') or []) if str(t).strip())
+        chip_row = (f'<div style="margin-top:11px; display:flex; gap:6px; flex-wrap:wrap;">{chips}</div>'
+                    if chips else '')
+        st.markdown(
+            '<div class="card" style="margin-top:10px;">'
+            '<div style="display:flex; align-items:center; gap:11px; flex-wrap:wrap;">'
+            f'<span style="font-weight:700; font-size:1.02rem; color:var(--ink);">{name}</span>{badge}</div>'
+            f'<div style="font-size:0.92rem; color:var(--slate); line-height:1.55; margin-top:7px;">{rationale}</div>'
+            f'{chip_row}</div>', unsafe_allow_html=True)
+
+    unc = data.get('uncertainties') or []
+    if unc:
+        rows = ''.join(
+            '<div style="margin:7px 0; font-size:0.92rem; line-height:1.5;">'
+            f'<span style="font-weight:700; color:var(--ink);">{(u.get("title") or "").strip()}</span>'
+            f'<span style="color:var(--slate);"> — {(u.get("detail") or "").strip()}</span></div>'
+            for u in unc)
+        st.markdown('<div class="sectlabel" style="margin:18px 0 6px 2px;">Key uncertainties</div>',
+                    unsafe_allow_html=True)
+        st.markdown(f'<div class="card">{rows}</div>', unsafe_allow_html=True)
+
+
 # ===========================================================================
 # Verdict hero
 # ===========================================================================
@@ -697,7 +746,7 @@ if not ticker:
                 if _key:
                     try:
                         with st.spinner("Summarising sector impact…"):
-                            st.markdown(cached_macro(_key, _llm_model(), tuple(n['title'] for n in _items)))
+                            render_macro(cached_macro(_key, _llm_model(), tuple(n['title'] for n in _items)))
                     except Exception as e:
                         st.error(f"Couldn't reach the model: {e}")
                 with st.expander(f"Headlines screened ({len(_items)})"):
