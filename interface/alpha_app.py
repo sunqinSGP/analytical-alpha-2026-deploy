@@ -706,7 +706,8 @@ def render_options_tab(ticker, result, data, cs):
     pdat = data.get('price_data')
     if pdat is not None and getattr(pdat, 'empty', True) is False and 'Close' in pdat:
         closes = [float(x) for x in pdat['Close'].dropna().tolist()]
-    oe = opt.evaluate(chains, spot, closes=closes, iv_history=None, params=params,
+    iv_hist = opt.iv_history_values(_load_iv_history(), ticker)
+    oe = opt.evaluate(chains, spot, closes=closes, iv_history=iv_hist, params=params,
                       earnings_in_days=meta.get('earnings_in_days'), today=datetime.now().date())
     vol, g = oe['vol'], oe['gates']
 
@@ -811,6 +812,17 @@ def _load_saved_screen():
             return json.load(f)
     except Exception:
         return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_iv_history():
+    """Rolling per-ticker ATM-IV history accumulated by the nightly scan (powers IV-Rank)."""
+    path = os.path.join(os.path.dirname(__file__), '..', 'data', 'iv_history.json')
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 def _render_screen_tiers(rows, universe_count, skipped):
@@ -929,6 +941,46 @@ def _render_oversold_sectors(sectors_dict):
                 st.error(f"Couldn't reach the model: {e}")
 
 
+def _render_options_ideas(opt_block):
+    """Top premium-selling (cash-secured put) ideas from the nightly options pass."""
+    ideas = (opt_block or {}).get('ideas') or []
+    sectlabel("Options income ideas")
+    if not ideas:
+        st.caption("No premium-selling ideas in the latest scan (or the nightly options pass hasn't run yet). "
+                   "Informational, not advice.")
+        return
+    st.caption(f"{len(ideas)} liquid US names where selling premium screens attractive (implied vol rich, no "
+               "earnings within ~45 days), ranked by annualised yield on a cash-secured put. "
+               "Informational, not advice.")
+
+    def n0(v):
+        return f"{v:,.0f}" if isinstance(v, (int, float)) else "—"
+    rows_html = []
+    for r in ideas:
+        c = r.get('csp') or {}
+        ivr = r.get('iv_rank')
+        ivr_s = str(round(ivr)) if ivr is not None else "—"
+        ivrv = r.get('iv_rv')
+        ivrv_s = f"{ivrv}×" if ivrv is not None else "—"
+        ed = r.get('earnings_in_days')
+        ed_s = f"{ed}d" if ed is not None else "—"
+        prem = c.get('premium')
+        prem_s = f"${prem:.2f}" if isinstance(prem, (int, float)) else "—"
+        delta = c.get('delta')
+        delta_s = f"{delta:.2f}" if isinstance(delta, (int, float)) else "—"
+        ay = c.get('ann_yield_pct')
+        ay_s = f"{ay}%" if ay is not None else "—"
+        rows_html.append(
+            f'<tr><td><b>{r.get("ticker")}</b></td><td>${n0(r.get("spot"))}</td>'
+            f'<td>{ivr_s}</td><td>{ivrv_s}</td><td>${n0(c.get("strike"))}</td>'
+            f'<td>{delta_s}</td><td>{c.get("dte") if c.get("dte") is not None else "—"}</td>'
+            f'<td>{prem_s}</td><td style="color:var(--pos); font-weight:700;">{ay_s}</td>'
+            f'<td>{n0(c.get("oi"))}</td><td>{ed_s}</td></tr>')
+    head = ('<tr><th>Ticker</th><th>Spot</th><th>IV-Rank</th><th>IV/RV</th><th>Sell put</th>'
+            '<th>&Delta;</th><th>DTE</th><th>Premium</th><th>Ann. yield</th><th>OI</th><th>Earnings</th></tr>')
+    st.markdown(f'<table class="clean">{head}{"".join(rows_html)}</table>', unsafe_allow_html=True)
+
+
 def render_screener():
     saved = _load_saved_screen()
     cc = st.columns([0.62, 0.38])
@@ -945,6 +997,10 @@ def render_screener():
 
     if saved and saved.get('sectors'):
         _render_oversold_sectors(saved['sectors'])
+        st.markdown("---")
+
+    if saved and saved.get('options'):
+        _render_options_ideas(saved['options'])
         st.markdown("---")
 
     if live:

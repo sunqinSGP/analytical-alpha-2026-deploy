@@ -374,6 +374,17 @@ _octx = ai.options_context({'data': {'name': 'Canned', 'sector': 'Tech', 'indust
 check("options_context embeds the ticker + IV read", 'CAN' in _octx and 'IV' in _octx)
 check("options coach prompt requests JSON read/income/growth",
       '"read"' in ai.OPTIONS_COACH_INSTRUCTION and '"growth"' in ai.OPTIONS_COACH_INSTRUCTION)
+# IV history (powers IV-Rank; accumulated by the nightly scan)
+_h = opt.update_iv_history({}, 'AAPL', '2026-06-01', 0.30)
+_h = opt.update_iv_history(_h, 'AAPL', '2026-06-02', 0.34)
+check("update_iv_history appends one entry per date", len(_h['AAPL']) == 2)
+check("update_iv_history replaces a same-date entry",
+      len(opt.update_iv_history(_h, 'AAPL', '2026-06-02', 0.40)['AAPL']) == 2)
+check("update_iv_history caps the series length",
+      len(opt.update_iv_history({'X': [{'date': str(i), 'iv': 0.2} for i in range(300)]},
+                                'X', '9999', 0.2, cap=252)['X']) == 252)
+check("update_iv_history is a no-op on None IV", opt.update_iv_history({}, 'Z', 'd', None) == {})
+check("iv_history_values extracts the IV floats in order", opt.iv_history_values(_h, 'AAPL') == [0.30, 0.34])
 
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 sys.exit(1 if FAIL else 0)

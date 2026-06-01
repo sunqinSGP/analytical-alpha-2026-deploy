@@ -394,6 +394,26 @@ def evaluate(chains, spot, closes=None, iv_history=None, params=None,
 
 
 # ---------------------------------------------------------------------------
+# IV history (persisted nightly; powers IV-Rank). Pure dict transforms.
+# ---------------------------------------------------------------------------
+def iv_history_values(history, ticker):
+    """Past ATM-IV readings for a ticker as a plain float list (for iv_rank)."""
+    return [e.get('iv') for e in (history or {}).get(ticker, []) if e.get('iv') is not None]
+
+
+def update_iv_history(history, ticker, date_str, atm_iv, cap=252):
+    """Append today's ATM IV to the rolling per-ticker history (one entry per date, capped).
+    Pure — returns a NEW dict; the caller persists it. No-op when atm_iv is None."""
+    history = dict(history or {})
+    if atm_iv is None:
+        return history
+    series = [e for e in history.get(ticker, []) if e.get('date') != date_str]
+    series.append({'date': date_str, 'iv': round(float(atm_iv), 4)})
+    history[ticker] = series[-cap:]
+    return history
+
+
+# ---------------------------------------------------------------------------
 # Network: fetch + normalise an option chain (the only impure function)
 # ---------------------------------------------------------------------------
 def normalize_chain(df):
