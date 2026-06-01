@@ -1,7 +1,7 @@
 __pycache__/
 *.pyc
 .streamlit/secrets.toml
-.streamlit/
+.streamlit/*.local.toml
 *.local.toml
 *.local.json
 data/screen_results.json

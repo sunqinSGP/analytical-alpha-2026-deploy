@@ -202,10 +202,24 @@ small{ color:var(--muted); }
 [data-testid="stWidgetLabel"] p{ font-size:0.72rem !important; font-weight:600 !important;
   color:var(--muted) !important; margin-bottom:3px !important; }
 
-/* Inputs & buttons */
-input, select, textarea, .stTextInput>div>div>input{
-  border-radius:9px !important; border:1px solid #cbd5e1 !important; font-size:0.9rem !important; }
+/* Inputs — force light bg + dark text (OS dark mode makes Streamlit's widget defaults dark) */
+input, select, textarea, .stTextInput input, .stNumberInput input, .stTextArea textarea{
+  border-radius:9px !important; border:1px solid #cbd5e1 !important; font-size:0.9rem !important;
+  background:var(--surface) !important; color:var(--ink) !important; }
+input::placeholder, textarea::placeholder{ color:var(--faint) !important; opacity:1 !important; }
 input:focus-visible{ border-color:var(--accent) !important; box-shadow:0 0 0 3px rgba(37,99,235,0.12) !important; }
+[data-baseweb="input"], [data-baseweb="base-input"]{ background:var(--surface) !important; }
+[data-baseweb="input"] *, [data-baseweb="base-input"] *{ color:var(--ink) !important; }
+/* selectbox control + its dropdown menu */
+[data-baseweb="select"] > div{ background:var(--surface) !important; color:var(--ink) !important; border:1px solid #cbd5e1 !important; }
+[data-baseweb="select"] div, [data-baseweb="select"] span, [data-baseweb="select"] input{ color:var(--ink) !important; }
+[data-baseweb="select"] svg{ fill:var(--muted) !important; }
+[data-baseweb="popover"] ul, [data-baseweb="popover"] [role="listbox"], [data-baseweb="menu"]{ background:var(--surface) !important; }
+[data-baseweb="popover"] li, [data-baseweb="popover"] [role="option"]{ color:var(--ink) !important; background:var(--surface) !important; }
+[data-baseweb="popover"] [role="option"]:hover{ background:var(--accent-soft) !important; }
+/* chat input */
+[data-testid="stChatInput"], [data-testid="stChatInput"]>div, [data-testid="stChatInputContainer"]{ background:var(--surface) !important; }
+[data-testid="stChatInput"] textarea{ background:var(--surface) !important; color:var(--ink) !important; }
 /* Buttons. Legacy (older-DOM) rules first; the modern data-testid rules come LAST so they
    win on equal specificity. Secondary = white + ink; primary (incl. form-submit) = navy + white. */
 .stButton>button, .stDownloadButton>button, [data-testid="stFormSubmitButton"]>button{

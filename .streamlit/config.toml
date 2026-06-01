@@ -1,0 +1,8 @@
+# Force the app's own theme so it never inherits the viewer's OS dark mode (which was
+# turning inputs / dropdowns / chat boxes dark). Matches the Wealth Hub palette.
+[theme]
+base = "light"
+primaryColor = "#1F3864"
+backgroundColor = "#eef1f6"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#16203a"
