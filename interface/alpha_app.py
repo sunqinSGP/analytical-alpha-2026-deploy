@@ -651,6 +651,28 @@ def render_screener():
 # ===========================================================================
 # Watchlist
 # ===========================================================================
+def _sparkline_svg(closes, up, w=130, h=34):
+    """A tiny inline SVG price sparkline (MSN-style), coloured green/red by direction."""
+    closes = [c for c in (closes or []) if c == c]
+    if len(closes) < 2:
+        return "<span style='color:var(--faint); font-size:0.75rem;'>—</span>"
+    lo, hi = min(closes), max(closes)
+    rng = (hi - lo) or 1.0
+    n = len(closes)
+    pts = [(i / (n - 1) * w, h - 2 - (c - lo) / rng * (h - 4)) for i, c in enumerate(closes)]
+    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+    area = f"0,{h} " + line + f" {w},{h}"
+    color = '#15803d' if up else '#b91c1c'
+    return (f"<svg width='100%' height='{h}' viewBox='0 0 {w} {h}' preserveAspectRatio='none' "
+            f"style='display:block; max-width:{w}px;'>"
+            f"<polygon points='{area}' fill='{color}' opacity='0.10'/>"
+            f"<polyline points='{line}' fill='none' stroke='{color}' stroke-width='1.6' "
+            f"stroke-linejoin='round' stroke-linecap='round'/></svg>")
+
+
+WL_COLS = [0.24, 0.16, 0.12, 0.14, 0.18, 0.16]
+
+
 def render_watchlist():
     wlist = get_watchlist()
 
@@ -671,7 +693,7 @@ def render_watchlist():
 
     cap, sc = st.columns([0.6, 0.4])
     with cap:
-        st.caption(f"{len(wlist)} names · saved locally · **Analyze** opens one, **✕** removes it.")
+        st.caption(f"{len(wlist)} names · saved locally · **↗** opens one, **✕** removes it.")
     with sc:
         sort_by = st.selectbox("Sort by", ['Added', 'Conviction', 'Moat', "Today's move", 'Name'],
                                key='wl_sort', label_visibility="collapsed")
@@ -687,11 +709,15 @@ def render_watchlist():
             prev = info.get('regularMarketPreviousClose') or info.get('previousClose')
             px = r['data']['price']
             day = ((px / prev - 1) * 100) if (prev and px) else None
-            return {'ticker': t, 'name': r['data']['name'], 'price': px,
-                    'ccy': detect_currency(t), 'conviction': r['thesis']['conviction'],
-                    'moat': r['qualitative']['moat']['moat_rating'],
+            dchg = (px - prev) if (prev and px) else None
+            pdata = r['data'].get('price_data')
+            closes = (pdata['Close'].tail(30).tolist()
+                      if (pdata is not None and getattr(pdata, 'empty', True) is False
+                          and 'Close' in getattr(pdata, 'columns', [])) else [])
+            return {'ticker': t, 'name': r['data']['name'], 'price': px, 'ccy': detect_currency(t),
+                    'conviction': r['thesis']['conviction'], 'moat': r['qualitative']['moat']['moat_rating'],
                     'risk': r['risk_management']['risk_factors']['risk_level'],
-                    'nob': r['nob']['name'], 'day': day}
+                    'nob': r['nob']['name'], 'day': day, 'dchg': dchg, 'closes': closes}
         except Exception:
             return {'ticker': t, 'error': True}
 
@@ -716,38 +742,61 @@ def render_watchlist():
             return (err, t)
         return (err,)  # 'Added' — stable sort preserves the saved order
 
+    hdr = st.columns(WL_COLS)
+    for col, lbl in zip(hdr, ['Name', '30-day', 'Last', 'Change', 'Conviction', '']):
+        col.markdown(f"<div class='sectlabel' style='margin:0 0 2px 0;'>{lbl}</div>", unsafe_allow_html=True)
+    st.markdown("<div style='border-bottom:1px solid var(--line);'></div>", unsafe_allow_html=True)
+
     for t in sorted(wlist, key=_sort_key):
         m = metrics.get(t, {'ticker': t, 'error': True})
-        row = st.columns([0.74, 0.16, 0.10])
-        with row[0]:
-            if m.get('error'):
-                st.markdown(f"**{t}** · <span style='color:var(--faint);'>no data — delisted or rate-limited</span>",
+        row = st.columns(WL_COLS, vertical_alignment="center")
+        if m.get('error'):
+            row[0].markdown(f"<span style='font-weight:700;'>{t}</span>", unsafe_allow_html=True)
+            row[1].markdown("<span style='color:var(--faint); font-size:0.78rem;'>no data — delisted or rate-limited</span>",
                             unsafe_allow_html=True)
+        else:
+            cc = CURRENCY_SYMBOLS.get(m['ccy'], '$')
+            day = m.get('day')
+            up = (day is None) or (day >= 0)
+            # Name
+            row[0].markdown(
+                f"<div style='line-height:1.2;'><span style='font-weight:700;'>{m['ticker']}</span>"
+                f"<br><span style='color:var(--muted); font-size:0.76rem;'>{m['name'][:24]}</span></div>",
+                unsafe_allow_html=True)
+            # Sparkline (30-day)
+            row[1].markdown(_sparkline_svg(m.get('closes'), up), unsafe_allow_html=True)
+            # Last price
+            price = f"{cc}{m['price']:,.2f}" if m['price'] else "—"
+            row[2].markdown(f"<span style='font-weight:600; color:var(--ink);'>{price}</span>", unsafe_allow_html=True)
+            # Change (% + absolute)
+            if day is not None:
+                dcol = 'var(--pos)' if day >= 0 else 'var(--neg)'
+                dchg = m.get('dchg')
+                sub = (f"{'+' if (dchg or 0) >= 0 else '−'}{cc}{abs(dchg):,.2f}" if dchg is not None else "")
+                row[3].markdown(
+                    f"<div style='color:{dcol}; line-height:1.2;'>"
+                    f"<span style='font-weight:700; font-size:0.9rem;'>{'▲' if day >= 0 else '▼'} {abs(day):.1f}%</span>"
+                    f"<br><span style='font-size:0.74rem;'>{sub}</span></div>", unsafe_allow_html=True)
             else:
-                cc = CURRENCY_SYMBOLS.get(m['ccy'], '$')
-                conv_color = CONV_COLORS.get(m['conviction'], 'var(--muted)')
-                price = f"{cc}{m['price']:,.2f}" if m['price'] else "—"
-                day = m.get('day')
-                if day is not None:
-                    dcol = 'var(--pos)' if day >= 0 else 'var(--neg)'
-                    day_html = (f"<span style='color:{dcol}; font-weight:600; font-size:0.82rem;'>"
-                                f"{'▲' if day >= 0 else '▼'} {abs(day):.1f}% today</span>")
-                else:
-                    day_html = ""
-                st.markdown(
-                    "<div style='display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;'>"
-                    f"<span style='font-weight:700;'>{m['ticker']}</span>"
-                    f"<span style='color:var(--muted); font-size:0.85rem;'>{m['name'][:28]}</span>"
-                    f"<span style='color:{conv_color}; font-weight:600; font-size:0.82rem;'>{m['conviction'].title()}</span>"
-                    f"{day_html}"
-                    f"<span style='color:var(--faint); font-size:0.82rem;'>{price} · moat {m['moat']:.1f}/10 · "
-                    f"{m['risk']} risk · {m['nob']}</span></div>", unsafe_allow_html=True)
-        if row[1].button("Analyze", key=f"wl_go_{t}", use_container_width=True):
-            st.session_state['wl_load'] = t
-            st.rerun()
-        if row[2].button("✕", key=f"wl_rm_{t}", use_container_width=True, help=f"Remove {t}"):
-            set_watchlist(wl.remove(wlist, t))
-            st.rerun()
+                row[3].markdown("<span style='color:var(--faint);'>—</span>", unsafe_allow_html=True)
+            # Conviction + moat/risk
+            conv_color = CONV_COLORS.get(m['conviction'], 'var(--muted)')
+            row[4].markdown(
+                f"<div style='line-height:1.2;'><span style='color:{conv_color}; font-weight:600; font-size:0.82rem;'>"
+                f"{m['conviction'].title()}</span><br>"
+                f"<span style='color:var(--faint); font-size:0.74rem;'>moat {m['moat']:.1f} · {m['risk']} risk</span></div>",
+                unsafe_allow_html=True)
+        # Actions
+        with row[5]:
+            b = st.columns(2)
+            if b[0].button("↗", key=f"wl_go_{t}", use_container_width=True, help=f"Open {t}"):
+                st.session_state['wl_load'] = t
+                st.rerun()
+            if b[1].button("✕", key=f"wl_rm_{t}", use_container_width=True, help=f"Remove {t}"):
+                set_watchlist(wl.remove(wlist, t))
+                st.rerun()
+        st.markdown("<div style='border-bottom:1px solid var(--line); margin:1px 0 4px 0;'></div>",
+                    unsafe_allow_html=True)
 
 
 # ===========================================================================
