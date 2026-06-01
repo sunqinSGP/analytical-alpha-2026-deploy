@@ -578,19 +578,22 @@ def render_conviction_ladder(active):
         color = CONV_COLORS.get(level, '#64748b')
         if on:
             rows.append(
-                f'<div style="display:flex; align-items:center; gap:12px; padding:9px 12px; border-radius:10px;'
-                f' background:{color}0d; border:1px solid {color}33;">'
-                f'<span class="dot" style="background:{color};"></span>'
-                f'<b style="color:{color}; font-size:0.82rem;">{level.title()}</b>'
-                f'<span style="color:var(--slate); font-size:0.8rem;">{detail}</span>'
-                f'<span class="pill" style="margin-left:auto; color:{color}; border-color:{color}33;">Active</span></div>')
+                f'<div style="display:flex; align-items:center; gap:12px; padding:14px 16px; border-radius:12px;'
+                f' background:{color}16; border:1px solid {color}55; border-left:5px solid {color};'
+                f' box-shadow:0 6px 18px {color}26;">'
+                f'<span class="dot" style="width:11px; height:11px; background:{color}; box-shadow:0 0 0 3px {color}22;"></span>'
+                f'<b style="color:{color}; font-size:1.0rem; font-weight:800; letter-spacing:-0.01em;">{level.title()}</b>'
+                f'<span style="color:var(--ink); font-size:0.85rem;">{detail}</span>'
+                f'<span style="margin-left:auto; background:{color}; color:#fff; font-size:0.68rem; font-weight:800;'
+                f' padding:4px 12px; border-radius:999px; text-transform:uppercase; letter-spacing:0.06em;'
+                f' white-space:nowrap;">★ Active</span></div>')
         else:
             rows.append(
-                f'<div style="display:flex; align-items:center; gap:12px; padding:9px 12px; opacity:0.5;">'
+                f'<div style="display:flex; align-items:center; gap:12px; padding:9px 16px; opacity:0.42;">'
                 f'<span class="dot" style="background:#cbd5e1;"></span>'
-                f'<span style="font-size:0.8rem; color:var(--muted);">{level.title()}</span>'
+                f'<span style="font-size:0.82rem; color:var(--muted); font-weight:600;">{level.title()}</span>'
                 f'<span style="font-size:0.78rem; color:var(--faint);">{detail}</span></div>')
-    st.markdown('<div style="display:flex; flex-direction:column; gap:4px;">' + ''.join(rows) + '</div>',
+    st.markdown('<div style="display:flex; flex-direction:column; gap:5px;">' + ''.join(rows) + '</div>',
                 unsafe_allow_html=True)
 
 
@@ -1156,10 +1159,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 AUTO_FW = 'Auto-detect'
+# "← Home" clears the ticker box and returns to the landing. Bumping a key suffix rebuilds the
+# form's text input fresh (setting its value to '' isn't honoured for a form widget's display).
+if st.session_state.get('go_home'):
+    st.session_state.pop('go_home')
+    st.session_state.pop('confirmed', None)
+    st.session_state['ticker_key_n'] = st.session_state.get('ticker_key_n', 0) + 1
+_TK_KEY = f"ticker_input_{st.session_state.get('ticker_key_n', 0)}"
 # A one-click "Analyze" from the Watchlist preloads the ticker box and auto-confirms it.
 if st.session_state.get('wl_load'):
     _pre = st.session_state.pop('wl_load')
-    st.session_state['ticker_input'] = _pre
+    st.session_state[_TK_KEY] = _pre
     st.session_state['confirmed'] = _pre.upper()
     st.session_state['fw_choice'] = AUTO_FW
 # Apply a framework the engine auto-detected on the previous run (queued after analysis), set
@@ -1173,7 +1183,7 @@ with st.form("analyze_form"):
     c1, c2, c3 = st.columns([0.5, 0.32, 0.18])
     with c1:
         _raw = st.text_input(
-            "Company or ticker", placeholder="Tencent · AAPL · 3323.HK · DBS", key="ticker_input",
+            "Company or ticker", placeholder="Tencent · AAPL · 3323.HK · DBS", key=_TK_KEY,
             help="Type a company name OR a symbol — e.g. 'Tencent' resolves to 0700.HK, 'apple' to AAPL. "
                  "Foreign listings also work via Yahoo suffixes (.HK, .SI, .L…).",
         ).strip()
@@ -1216,12 +1226,13 @@ if submit and ticker:
 # ===========================================================================
 if not ticker:
     st.markdown("""
-    <div style="padding:26px 0 8px 0;">
-      <h1 style="font-size:1.9rem !important;">Know the verdict before the data.</h1>
-      <p style="font-size:1.0rem; max-width:640px; margin-top:6px;">
+    <div style="background:linear-gradient(135deg,#1F3864,#2E5496); border-radius:18px; padding:30px 32px;
+        box-shadow:0 10px 30px rgba(31,56,100,0.18); margin:4px 0 18px 0;">
+      <div style="font-size:1.95rem; font-weight:800; letter-spacing:-0.02em; color:#fff; line-height:1.12;">
+        Know the verdict before the data.</div>
+      <div style="font-size:1.0rem; color:#cfe0f6; max-width:660px; margin-top:10px; line-height:1.55;">
         Nature-of-Business classification, a quantitative moat rating, three forward-looking
-        indicators and risk-based sizing — distilled into a single, plain-English call.
-      </p>
+        indicators and risk-based sizing — distilled into a single, plain-English call.</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1386,6 +1397,9 @@ mcap = info.get('marketCap'); name = data['name']
 # ---- Identity + verdict ----
 emp = data.get('employees')
 emp_str = f"{emp:,}" if isinstance(emp, (int, float)) else "N/A"
+if st.button("← Home", help="Back to the opening page (clears the ticker)"):
+    st.session_state['go_home'] = True
+    st.rerun()
 _idc = st.columns([0.78, 0.22])
 with _idc[0]:
     st.markdown(f"""
