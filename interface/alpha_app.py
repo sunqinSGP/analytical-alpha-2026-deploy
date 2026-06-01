@@ -98,6 +98,44 @@ def set_watchlist(tickers):
         pass
 
 
+def _portfolio_positions():
+    """The user's holdings from this session, or their saved secret. None if neither set."""
+    if st.session_state.get('portfolio'):
+        return st.session_state['portfolio']
+    try:
+        payload = json.loads(st.secrets["portfolio_json"])
+        return payload.get('positions') if isinstance(payload, dict) else payload
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_holdings_value(positions_json, base_ccy):
+    """Total book value in base currency (reuses cached prices/FX). Positions that fail to
+    price fall back to cost basis so the denominator stays complete."""
+    positions = json.loads(positions_json)
+    total = 0.0
+    for p in positions:
+        tk = (p.get('ticker') or '').upper()
+        if not tk:
+            continue
+        try:
+            px = None
+            r = cached_analysis(tk, 0, None)
+            if 'error' not in r:
+                px = r['data'].get('price')
+            if not px:
+                px = p.get('cost_basis')  # fallback so ETFs/untracked names still count
+            if not px:
+                continue
+            ccy = p.get('currency') or detect_currency(tk)
+            fx = cached_fx(ccy, base_ccy) or 1.0
+            total += float(p.get('shares') or 0) * float(px) * fx
+        except Exception:
+            continue
+    return total
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def cached_news():
     return news.fetch_market_news()
@@ -450,6 +488,75 @@ def render_verdict_hero(result, current_weight=0):
       </div>
     </div>
     """, unsafe_allow_html=True)
+
+
+# ===========================================================================
+# Semantic KPI card + "you hold this" callout
+# ===========================================================================
+_SENT_COLOR = {'pos': ('var(--pos)', 'var(--pos)'), 'neg': ('var(--neg)', 'var(--neg)'),
+               'amber': ('var(--amber)', 'var(--amber)'), 'neutral': ('var(--navy)', 'var(--navy2)')}
+
+
+def _stat(col, label, value, sentiment='neutral'):
+    """A KPI card whose VALUE is coloured by sentiment (green strong / red weak / amber mixed)."""
+    vcol, edge = _SENT_COLOR.get(sentiment, _SENT_COLOR['neutral'])
+    col.markdown(
+        f"<div style='background:var(--surface); border:1px solid var(--line); border-left:4px solid {edge}; "
+        f"border-radius:12px; padding:13px 15px; box-shadow:0 1px 3px rgba(31,56,100,0.05); height:100%;'>"
+        f"<div style='font-size:0.74rem; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted);'>{label}</div>"
+        f"<div style='font-size:1.3rem; font-weight:800; color:{vcol}; letter-spacing:-0.01em; white-space:nowrap;'>{value}</div>"
+        f"</div>", unsafe_allow_html=True)
+
+
+def _sent_high(v, good, bad):
+    """pos if v>=good, neg if v<bad, else neutral (None -> neutral)."""
+    if v is None:
+        return 'neutral'
+    return 'pos' if v >= good else ('neg' if v < bad else 'neutral')
+
+
+def render_holding(held, ticker, result, price, currency, cs):
+    """If the analysed stock is one the user owns, show the position + a sizing recommendation
+    (TRIM when over the risk-based cap, ADD/HOLD otherwise)."""
+    conviction = result['thesis']['conviction']
+    max_pos = result['risk_management']['risk_factors'].get('max_suggested_position', 10)
+    shares = float(held.get('shares') or 0)
+    cost = held.get('cost_basis')
+    mv_native = shares * (price or 0)
+
+    pnl_html = ''
+    if cost and price:
+        pnl_pct = (price / float(cost) - 1) * 100
+        pcol = 'var(--pos)' if pnl_pct >= 0 else 'var(--neg)'
+        pnl_html = (f" · cost {cs}{float(cost):,.2f} · "
+                    f"<span style='color:{pcol}; font-weight:700;'>{'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%</span>")
+
+    # Weight vs the whole book (best-effort; base SGD). Only computed for held names.
+    weight, base_ccy = None, 'SGD'
+    try:
+        with st.spinner("Sizing against your book…"):
+            total = cached_holdings_value(json.dumps(_portfolio_positions()), base_ccy)
+        fx = cached_fx(currency, base_ccy) or 1.0
+        if total and total > 0:
+            weight = mv_native * fx / total * 100
+    except Exception:
+        weight = None
+
+    action, acolor, asub = recommendation_for(conviction, max_pos, weight or 0)
+    weight_txt = (f"{weight:.1f}% of your book" if weight is not None else "in your book")
+    cap_note = (f" · over your {max_pos}% cap" if (weight is not None and weight > max_pos) else "")
+    st.markdown(
+        f"""<div class="card" style="border-left:4px solid var(--navy2); margin-top:12px;">
+      <div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;">
+        <span class="sectlabel" style="margin:0; color:var(--navy2);">📌 You hold this</span>
+        <span style="font-weight:700; color:var(--ink);">{shares:,.0f} shares · {cs}{mv_native:,.0f}</span>
+        <span style="color:var(--faint); font-size:0.85rem;">{weight_txt}{cap_note}{pnl_html}</span>
+      </div>
+      <div style="margin-top:9px; display:flex; align-items:baseline; gap:9px; flex-wrap:wrap;">
+        <span class="pill" style="color:{acolor}; border-color:{acolor}44; background:{acolor}12; font-weight:700;">{action}</span>
+        <span style="color:var(--slate); font-size:0.88rem;">{asub}</span>
+      </div>
+    </div>""", unsafe_allow_html=True)
 
 
 # ===========================================================================
@@ -1299,15 +1406,25 @@ with _idc[1]:
 
 render_verdict_hero(result)
 
-# ---- KPI strip ----
+# ---- If you own it: position + sizing recommendation ----
+_held = next((p for p in (_portfolio_positions() or [])
+              if (p.get('ticker') or '').upper() == ticker.upper()), None)
+if _held:
+    render_holding(_held, ticker, result, price, currency, cs)
+
+# ---- KPI strip (values colour-coded: green strong · red weak · amber mixed) ----
 st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
 m = st.columns(6)
-m[0].metric("Price", f"{cs}{price:,.2f}")
-m[1].metric("Mkt cap", format_market_cap(mcap, cs))
-m[2].metric("R40 · FCF", fmt_num(r40.get('rule_40_fcf')))
-m[3].metric("Gross marg.", fmt_pct(gm_data.get('gross_margin_pct')))
-m[4].metric("Moat", f"{moat['moat_rating']:.1f}/10")
-m[5].metric("Risk", risk_factors.get('risk_level', 'N/A'))
+_stat(m[0], "Price", f"{cs}{price:,.2f}")
+_stat(m[1], "Mkt cap", format_market_cap(mcap, cs))
+_r40 = r40.get('rule_40_fcf')
+_stat(m[2], "R40 · FCF", fmt_num(_r40), _sent_high(_r40, 40, 20))
+_gm = gm_data.get('gross_margin_pct')
+_stat(m[3], "Gross marg.", fmt_pct(_gm), _sent_high(_gm, 65, 35))
+_mo = moat['moat_rating']
+_stat(m[4], "Moat", f"{_mo:.1f}/10", _sent_high(_mo, 7, 4.5))
+_rl = risk_factors.get('risk_level', 'N/A')
+_stat(m[5], "Risk", _rl, {'Low': 'pos', 'Medium': 'amber', 'High': 'neg'}.get(_rl, 'neutral'))
 
 # ===========================================================================
 # TABS
