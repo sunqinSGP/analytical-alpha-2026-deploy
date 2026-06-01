@@ -20,7 +20,7 @@ from stock_analyzer.alpha_engine import (
 from stock_analyzer.verdict import CONV_COLORS, build_factor_attribution, recommendation_for
 from stock_analyzer import portfolio as pf
 from stock_analyzer import ai, news, sectors as sct, options as opt
-from stock_analyzer import watchlist as wl
+from stock_analyzer import watchlist as wl, positions as posn
 
 st.set_page_config(page_title="Analytical Alpha 2026", page_icon="◆",
                    layout="wide", initial_sidebar_state="collapsed")
@@ -102,6 +102,29 @@ def set_watchlist(tickers):
         wl.save(WATCHLIST_PATH, st.session_state['watchlist'])
     except Exception:
         pass
+
+
+POSITIONS_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'options_positions.json')
+
+
+def get_positions():
+    """The user's open options positions (session-cached, loaded from the gitignored JSON)."""
+    if 'opt_positions' not in st.session_state:
+        st.session_state['opt_positions'] = posn.load(POSITIONS_PATH)
+    return st.session_state['opt_positions']
+
+
+def set_positions(plist):
+    st.session_state['opt_positions'] = plist
+    try:
+        posn.save(POSITIONS_PATH, plist)
+    except Exception:
+        pass
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def cached_position_quote(ticker, expiry, strike, kind):
+    return opt.quote_position(ticker, expiry, strike, kind)
 
 
 def _portfolio_positions():
@@ -685,6 +708,81 @@ def _render_options_ai(rd):
     st.markdown(f'<div class="card">{body or "No structured read returned."}</div>', unsafe_allow_html=True)
 
 
+_ALERT_KIND = {'red': 'neg', 'amber': 'amber', 'green': 'pos'}
+
+
+def _render_positions_manager(ticker, cs, chains):
+    """Track open options positions for this ticker and flag management actions (live)."""
+    sectlabel(f"Your open positions · {ticker}")
+    mine = posn.for_ticker(get_positions(), ticker)
+    if not mine:
+        st.caption("No tracked positions for this ticker. Add one below to get management alerts — "
+                   "take-profit, roll, assignment risk, and earnings.")
+    for p in mine:
+        kind = opt.option_kind(p['strategy'])
+        try:
+            q = cached_position_quote(ticker, p['expiry'], p['strike'], kind)
+        except Exception:
+            q = None
+        live = q or {}
+        alerts = opt.position_alerts(p, live)
+        pl = opt.position_pl(p, live.get('mid'))
+        ot = 'PUT' if kind == 'put' else 'CALL'
+        dte = live.get('dte')
+        dte_s = f"{dte} DTE" if dte is not None else "—"
+        mid = live.get('mid')
+        now_s = f"{cs}{mid:.2f}" if isinstance(mid, (int, float)) else "—"
+        pld, plp = pl['pl_dollars'], pl['pl_pct']
+        if pld is None:
+            pl_html = '<span style="color:var(--muted);">P/L —</span>'
+        else:
+            sgn = '+' if pld >= 0 else '−'
+            col = 'var(--pos)' if pld >= 0 else 'var(--neg)'
+            pl_html = f'<span style="color:{col}; font-weight:700;">P/L {sgn}{cs}{abs(pld):,.0f} ({sgn}{abs(plp):.0f}%)</span>'
+        chips = ' '.join(pill(a['label'], _ALERT_KIND.get(a['level'], '')) for a in alerts)
+        unavail = ('' if q else '<div style="margin-top:6px; font-size:0.78rem; color:var(--faint);">'
+                   'Live quote unavailable (expiry may have passed, or data is temporarily down).</div>')
+        row = st.columns([0.92, 0.08])
+        with row[0]:
+            st.markdown(
+                '<div class="card" style="padding:12px 15px;">'
+                '<div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;">'
+                f'<b style="color:var(--navy); font-size:0.95rem;">{posn.STRATEGY_LABELS.get(p["strategy"], p["strategy"])}</b>'
+                f'<span style="color:var(--ink); font-weight:600;">{cs}{p["strike"]:.0f} {ot}</span>'
+                f'<span style="color:var(--muted); font-size:0.85rem;">exp {p["expiry"]} · {dte_s} · {p["contracts"]}x</span></div>'
+                f'<div style="margin-top:5px; font-size:0.85rem; color:var(--slate);">Opened {cs}{p["open_price"]:.2f} · now {now_s} · {pl_html}</div>'
+                f'<div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap;">{chips}</div>{unavail}</div>',
+                unsafe_allow_html=True)
+        with row[1]:
+            if st.button("✕", key=f"delpos_{p['id']}", help="Remove this position"):
+                set_positions(posn.remove(get_positions(), p['id']))
+                st.rerun()
+
+    with st.expander("➕ Track a new position"):
+        exps = sorted(chains.keys()) if chains else []
+        with st.form(f"addpos_{ticker}"):
+            cc = st.columns([0.3, 0.16, 0.28, 0.12, 0.14])
+            strat = cc[0].selectbox("Strategy", list(posn.STRATEGY_LABELS.keys()),
+                                    format_func=lambda s: posn.STRATEGY_LABELS[s], key=f"ps_strat_{ticker}")
+            strike = cc[1].number_input("Strike", min_value=0.0, step=1.0, key=f"ps_strike_{ticker}")
+            if exps:
+                expiry = cc[2].selectbox("Expiry", exps, key=f"ps_exp_{ticker}")
+            else:
+                expiry = cc[2].text_input("Expiry (YYYY-MM-DD)", key=f"ps_exp_{ticker}")
+            contracts = cc[3].number_input("Qty", min_value=1, value=1, step=1, key=f"ps_qty_{ticker}")
+            openp = cc[4].number_input("Open $", min_value=0.0, step=0.05, key=f"ps_open_{ticker}")
+            if st.form_submit_button("Add position", type="primary"):
+                newp = {'ticker': ticker, 'strategy': strat, 'strike': strike,
+                        'expiry': expiry, 'contracts': contracts, 'open_price': openp}
+                if posn.valid(newp):
+                    set_positions(posn.add(get_positions(), newp))
+                    st.rerun()
+                else:
+                    st.warning("Enter a strike and expiry (and ideally the open price).")
+    st.caption("Positions are saved locally (data/options_positions.json) and re-checked in the nightly scan. "
+               "Alerts are informational, not advice.")
+
+
 def render_options_tab(ticker, result, data, cs):
     st.caption("Rule-based options signals — informational, not advice. The durable edge in selling premium is "
                "the volatility risk premium: it smooths returns but caps upside and is NOT a hedge. LEAPS risk "
@@ -699,6 +797,8 @@ def render_options_tab(ticker, result, data, cs):
     if not chains:
         st.info("No listed options found for this ticker (or data is temporarily unavailable). "
                 "Liquid US stocks & ETFs have the deepest, most reliable chains.")
+        st.markdown("---")
+        _render_positions_manager(ticker, cs, {})
         return
 
     spot = meta.get('spot') or data.get('price') or 0
@@ -759,6 +859,9 @@ def render_options_tab(ticker, result, data, cs):
                 st.caption("AI-generated · informational, not financial advice.")
             except Exception as e:
                 st.error(f"Couldn't reach the model: {e}")
+
+    st.markdown("---")
+    _render_positions_manager(ticker, cs, chains)
 
 
 # ===========================================================================
@@ -981,6 +1084,36 @@ def _render_options_ideas(opt_block):
     st.markdown(f'<table class="clean">{head}{"".join(rows_html)}</table>', unsafe_allow_html=True)
 
 
+def _render_position_alerts(rows):
+    """Landing roll-up: tracked options positions that flagged an action in the last nightly scan."""
+    rows = rows or []
+    if not rows:
+        return
+    actionable = [r for r in rows if r.get('actionable')]
+    sectlabel("Options positions — action check")
+    if not actionable:
+        st.caption(f"All {len(rows)} tracked positions were on track as of the last scan — nothing flagged. "
+                   "Informational, not advice.")
+        return
+    st.caption(f"{len(actionable)} of {len(rows)} tracked positions flagged an action in the last scan. "
+               "Open the stock's Options tab to act. Informational, not advice.")
+    for r in actionable:
+        ot = 'PUT' if opt.option_kind(r['strategy']) == 'put' else 'CALL'
+        chips = ' '.join(pill(a['label'], _ALERT_KIND.get(a['level'], ''))
+                         for a in r.get('alerts', []) if a['level'] in ('red', 'amber'))
+        plp = r.get('pl_pct')
+        pl_s = (f' · P/L {"+" if plp >= 0 else "−"}{abs(plp):.0f}%') if plp is not None else ''
+        st.markdown(
+            '<div class="card" style="margin-top:8px; padding:11px 14px;">'
+            '<div style="display:flex; align-items:baseline; gap:9px; flex-wrap:wrap;">'
+            f'<b style="color:var(--navy);">{r.get("ticker")}</b>'
+            f'<span style="color:var(--ink); font-weight:600;">${r.get("strike", 0):.0f} {ot}</span>'
+            f'<span style="color:var(--muted); font-size:0.84rem;">{r.get("label")} · exp {r.get("expiry")} · '
+            f'{r.get("dte", "—")} DTE{pl_s}</span></div>'
+            f'<div style="margin-top:7px; display:flex; gap:6px; flex-wrap:wrap;">{chips}</div></div>',
+            unsafe_allow_html=True)
+
+
 def render_screener():
     saved = _load_saved_screen()
     cc = st.columns([0.62, 0.38])
@@ -1001,6 +1134,10 @@ def render_screener():
 
     if saved and saved.get('options'):
         _render_options_ideas(saved['options'])
+        st.markdown("---")
+
+    if saved and saved.get('position_alerts'):
+        _render_position_alerts(saved['position_alerts'])
         st.markdown("---")
 
     if live:

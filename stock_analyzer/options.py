@@ -44,7 +44,7 @@ DEFAULT_PARAMS = {
     'min_volume': 0,
     'max_spread_pct': 10.0,     # bid-ask spread as % of mid
     # management / sizing (informational)
-    'profit_take_pct': 50, 'roll_dte': 21,
+    'profit_take_pct': 50, 'roll_dte': 21, 'leaps_roll_dte': 90,
     'max_pos_pct': 5.0,         # suggested cap per position, % of portfolio
     # pricing
     'risk_free': 0.043, 'div_yield': 0.0,
@@ -414,6 +414,88 @@ def update_iv_history(history, ticker, date_str, atm_iv, cap=252):
 
 
 # ---------------------------------------------------------------------------
+# Open-position management — pure alert rules (live quote injected by the caller)
+# ---------------------------------------------------------------------------
+def option_kind(strategy):
+    """Option type for a tracked strategy: cash-secured put -> put, else call."""
+    return 'put' if strategy == 'csp' else 'call'
+
+
+def is_short(strategy):
+    """True for premium-selling (short) positions; LEAPS are long."""
+    return strategy in ('csp', 'covered_call')
+
+
+def find_contract(contracts, strike):
+    """The contract whose strike is nearest `strike` (None if the chain is empty)."""
+    cands = [c for c in (contracts or []) if c.get('strike') is not None]
+    if not cands:
+        return None
+    return min(cands, key=lambda c: abs(_f(c['strike']) - strike))
+
+
+def position_pl(pos, mid):
+    """Per-position P/L in dollars and % of the opening premium. Short profits as the option
+    decays (mid < open); long profits as it appreciates (mid > open). None if not computable."""
+    op = pos.get('open_price') or 0
+    n = (pos.get('contracts') or 1) * CONTRACT_MULTIPLIER
+    if mid is None or not op:
+        return {'pl_dollars': None, 'pl_pct': None}
+    if is_short(pos.get('strategy')):
+        return {'pl_dollars': (op - mid) * n, 'pl_pct': (op - mid) / op * 100}
+    return {'pl_dollars': (mid - op) * n, 'pl_pct': (mid - op) / op * 100}
+
+
+def position_alerts(pos, live, params=None):
+    """Action flags for one open position given a live snapshot.
+    live = {mid, delta, spot, dte, earnings_in_days}. Returns [{level, label, detail}] where
+    level is 'red' | 'amber' | 'green'. Pure — the caller supplies the live data."""
+    params = {**DEFAULT_PARAMS, **(params or {})}
+    strat = pos.get('strategy')
+    K = float(pos.get('strike') or 0)
+    op = pos.get('open_price') or 0
+    kind = option_kind(strat)
+    mid, delta = live.get('mid'), live.get('delta')
+    spot, dte, eid = live.get('spot'), live.get('dte'), live.get('earnings_in_days')
+    A = []
+    if is_short(strat):
+        if op and mid is not None:
+            captured = (op - mid) / op * 100
+            if captured >= params['profit_take_pct']:
+                A.append({'level': 'green', 'label': f"Take profit — {captured:.0f}% of max captured",
+                          'detail': f"buy back near ${mid:.2f} (sold ${op:.2f})"})
+        tested = ((delta is not None and abs(delta) >= 0.45)
+                  or (kind == 'put' and spot is not None and spot <= K)
+                  or (kind == 'call' and spot is not None and spot >= K))
+        if tested:
+            d = f", Δ {abs(delta):.2f}" if delta is not None else ""
+            sp = f"${spot:.2f}" if spot is not None else "?"
+            A.append({'level': 'red', 'label': "Strike tested — assignment risk",
+                      'detail': f"spot {sp} vs strike ${K:.0f}{d}"})
+        if dte is not None and dte <= params['roll_dte']:
+            A.append({'level': 'amber', 'label': f"{dte} DTE — manage",
+                      'detail': f"at/under your {params['roll_dte']}-DTE rule (roll out or close)"})
+        if eid is not None and 0 <= eid <= (dte if dte is not None else 10**9):
+            A.append({'level': 'amber', 'label': f"Earnings in ~{eid}d",
+                      'detail': "event risk before expiry on a short premium position"})
+    else:  # long LEAPS
+        if dte is not None and dte <= params.get('leaps_roll_dte', 90):
+            A.append({'level': 'amber', 'label': f"{dte} DTE — roll the LEAPS",
+                      'detail': "theta accelerates inside ~90 DTE"})
+        if op and mid is not None:
+            pct = (mid - op) / op * 100
+            if pct <= -50:
+                A.append({'level': 'red', 'label': f"Down {abs(pct):.0f}% — thesis check",
+                          'detail': "long premium eroding; re-underwrite or cut"})
+            elif pct >= 50:
+                A.append({'level': 'green', 'label': f"Up {pct:.0f}%",
+                          'detail': "consider trimming or rolling up to lock gains"})
+    if not A:
+        A.append({'level': 'green', 'label': "On track", 'detail': "no action triggered"})
+    return A
+
+
+# ---------------------------------------------------------------------------
 # Network: fetch + normalise an option chain (the only impure function)
 # ---------------------------------------------------------------------------
 def normalize_chain(df):
@@ -482,3 +564,46 @@ def fetch_option_chain(ticker, near_expiries=14, far_expiries=3, ticker_obj=None
         return (d - date.today()).days
     meta['earnings_in_days'] = safe_get(_earn_days)
     return chains, meta
+
+
+def quote_position(ticker, expiry, strike, kind, params=None, today=None, ticker_obj=None):
+    """Live snapshot for one tracked contract (a specific expiry+strike): fetch that expiry's chain,
+    find the nearest strike, and compute the current mid + Black-Scholes delta. Returns a dict
+    {mid, delta, iv, spot, dte, earnings_in_days, strike_found} or None. Network; best-effort."""
+    from .alpha_engine import _yf_ticker, safe_get
+    params = {**DEFAULT_PARAMS, **(params or {})}
+    t = ticker_obj or _yf_ticker(ticker)
+    oc = safe_get(lambda: t.option_chain(expiry))
+    if oc is None:
+        return None
+    contracts = normalize_chain(safe_get(lambda: (oc.puts if kind == 'put' else oc.calls)))
+    c = find_contract(contracts, strike)
+    fi = safe_get(lambda: t.fast_info) or {}
+    spot = safe_get(lambda: fi.get('last_price')) or safe_get(lambda: fi.get('lastPrice'))
+    if not spot:
+        h = safe_get(lambda: t.history(period='1d'))
+        if h is not None and not h.empty:
+            spot = float(h['Close'].iloc[-1])
+    dte = days_to(expiry, today)
+    out = {'mid': None, 'delta': None, 'iv': None, 'spot': spot, 'dte': dte,
+           'earnings_in_days': None, 'strike_found': None}
+    if c:
+        out['mid'] = mid_price(c)
+        out['iv'] = _f(c.get('iv'))
+        out['strike_found'] = _f(c.get('strike'))
+        if spot and dte and dte > 0:
+            out['delta'] = bs_delta(spot, _f(c.get('strike')), _years(dte),
+                                    params['risk_free'], _f(c.get('iv')), kind, params['div_yield'])
+
+    def _earn_days():
+        cal = safe_get(lambda: t.calendar)
+        ed = None
+        if isinstance(cal, dict):
+            v = cal.get('Earnings Date')
+            ed = v[0] if isinstance(v, (list, tuple)) and v else v
+        if ed is None:
+            return None
+        d = ed.date() if hasattr(ed, 'date') else ed
+        return (d - (today or date.today())).days
+    out['earnings_in_days'] = safe_get(_earn_days)
+    return out

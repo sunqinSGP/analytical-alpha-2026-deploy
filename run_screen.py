@@ -17,9 +17,11 @@ from stock_analyzer.alpha_engine import alpha_analysis, assign_screen_tier, _yf_
 from stock_analyzer.universe import WATCHLIST
 from stock_analyzer import sectors as sct
 from stock_analyzer import options as opt
+from stock_analyzer import positions as posn
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'screen_results.json')
 IVH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'iv_history.json')
+POS = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'options_positions.json')
 # US-listed names (plain symbols, no exchange suffix) are the reliably option-able set.
 US_OPTIONABLE = [tk for tk in WATCHLIST if '.' not in tk]
 
@@ -126,6 +128,39 @@ def screen_options(tickers, iv_hist, workers=4):
     return rows
 
 
+def screen_position_one(p):
+    """Live-quote one tracked position and compute its management alerts (or None)."""
+    try:
+        q = opt.quote_position(p['ticker'], p['expiry'], p['strike'], opt.option_kind(p['strategy']))
+        if not q:
+            return None
+        alerts = opt.position_alerts(p, q)
+        pl = opt.position_pl(p, q.get('mid'))
+        return {
+            'ticker': p['ticker'], 'strategy': p['strategy'],
+            'label': posn.STRATEGY_LABELS.get(p['strategy'], p['strategy']),
+            'strike': p['strike'], 'expiry': p['expiry'], 'contracts': p['contracts'],
+            'dte': q.get('dte'), 'mid': q.get('mid'),
+            'pl_pct': round(pl['pl_pct']) if pl['pl_pct'] is not None else None,
+            'alerts': alerts, 'actionable': sum(1 for a in alerts if a['level'] in ('red', 'amber')),
+        }
+    except Exception:
+        return None
+
+
+def screen_positions(positions, workers=3):
+    rows = []
+    if not positions:
+        return rows
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(screen_position_one, p): p for p in positions}
+        for fut in as_completed(futs):
+            r = fut.result()
+            if r:
+                rows.append(r)
+    return rows
+
+
 def main():
     t0 = time.time()
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] screening {len(WATCHLIST)} tickers…", flush=True)
@@ -156,6 +191,13 @@ def main():
                    key=lambda r: (r['csp'].get('ann_yield_pct') or 0), reverse=True)
     print(f"  options: {len(opt_rows)} scanned, {len(ideas)} income ideas", flush=True)
 
+    # Tracked open positions: live-quote each + compute management alerts.
+    positions = posn.load(POS)
+    pos_rows = screen_positions(positions)
+    pos_rows.sort(key=lambda r: -r['actionable'])
+    print(f"  positions: {len(positions)} tracked, "
+          f"{sum(1 for r in pos_rows if r['actionable'])} need action", flush=True)
+
     payload = {
         'generated_at': datetime.now().isoformat(timespec='seconds'),
         'generated_human': datetime.now().strftime('%d %b %Y, %H:%M'),
@@ -163,6 +205,7 @@ def main():
         'skipped': skipped, 'results': rows,
         'sectors': sector_data,
         'options': {'analysed': len(opt_rows), 'ideas': ideas[:40]},
+        'position_alerts': pos_rows,
     }
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, 'w', encoding='utf-8') as f:

@@ -21,6 +21,7 @@ from stock_analyzer import news as newsmod
 from stock_analyzer import sectors as sct
 from stock_analyzer import watchlist as wl
 from stock_analyzer import options as opt
+from stock_analyzer import positions as posn
 
 PASS, FAIL = 0, 0
 
@@ -385,6 +386,36 @@ check("update_iv_history caps the series length",
                                 'X', '9999', 0.2, cap=252)['X']) == 252)
 check("update_iv_history is a no-op on None IV", opt.update_iv_history({}, 'Z', 'd', None) == {})
 check("iv_history_values extracts the IV floats in order", opt.iv_history_values(_h, 'AAPL') == [0.30, 0.34])
+
+print("\n[15] Options positions")
+_p = posn.add([], {'ticker': 'aapl', 'strategy': 'csp', 'strike': 300, 'expiry': '2026-07-17',
+                   'contracts': 1, 'open_price': 4.30})
+check("positions.add normalises ticker + assigns an id", _p[0]['ticker'] == 'AAPL' and len(_p[0]['id']) > 0)
+check("positions.add rejects an invalid entry (no strike)", posn.add([], {'ticker': 'X', 'expiry': '2026-01-01'}) == [])
+check("positions.remove by id", posn.remove(_p, _p[0]['id']) == [])
+check("positions.for_ticker filters", len(posn.for_ticker(_p, 'aapl')) == 1 and posn.for_ticker(_p, 'TSLA') == [])
+check("option_kind csp->put, cc/leaps->call",
+      opt.option_kind('csp') == 'put' and opt.option_kind('covered_call') == 'call' and opt.option_kind('leaps') == 'call')
+check("is_short csp/cc short, leaps long",
+      opt.is_short('csp') and opt.is_short('covered_call') and not opt.is_short('leaps'))
+_csp = {'strategy': 'csp', 'strike': 300, 'open_price': 4.0, 'contracts': 2}
+check("short P/L is positive as the option decays", opt.position_pl(_csp, 1.0)['pl_dollars'] == (4.0 - 1.0) * 200)
+check("short P/L % captured", abs(opt.position_pl(_csp, 2.0)['pl_pct'] - 50.0) < 1e-9)
+_leaps = {'strategy': 'leaps', 'strike': 270, 'open_price': 80.0, 'contracts': 1}
+check("long P/L is positive as the option appreciates", opt.position_pl(_leaps, 100.0)['pl_dollars'] == (100.0 - 80.0) * 100)
+check("alert: take-profit fires at >=50% captured",
+      any('Take profit' in x['label'] for x in opt.position_alerts(_csp, {'mid': 2.0, 'delta': -0.2, 'spot': 320, 'dte': 30, 'earnings_in_days': None})))
+check("alert: strike-tested fires when ITM / high delta",
+      any(x['level'] == 'red' and 'tested' in x['label'].lower() for x in opt.position_alerts(_csp, {'mid': 6.0, 'delta': -0.55, 'spot': 298, 'dte': 30, 'earnings_in_days': None})))
+check("alert: 21-DTE manage fires",
+      any('manage' in x['label'].lower() for x in opt.position_alerts(_csp, {'mid': 3.0, 'delta': -0.3, 'spot': 320, 'dte': 18, 'earnings_in_days': None})))
+check("alert: earnings-before-expiry fires",
+      any('Earnings' in x['label'] for x in opt.position_alerts(_csp, {'mid': 3.0, 'delta': -0.3, 'spot': 320, 'dte': 40, 'earnings_in_days': 10})))
+check("alert: LEAPS roll fires inside 90 DTE",
+      any('roll the LEAPS' in x['label'] for x in opt.position_alerts(_leaps, {'mid': 82.0, 'delta': 0.75, 'spot': 305, 'dte': 80, 'earnings_in_days': None})))
+_ontrack = opt.position_alerts(_csp, {'mid': 3.8, 'delta': -0.25, 'spot': 325, 'dte': 40, 'earnings_in_days': None})
+check("alert: on-track when nothing triggers",
+      any(x['label'] == 'On track' for x in _ontrack) and not [x for x in _ontrack if x['level'] in ('red', 'amber')])
 
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 sys.exit(1 if FAIL else 0)
