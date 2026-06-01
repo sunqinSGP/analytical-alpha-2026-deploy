@@ -18,6 +18,7 @@ from stock_analyzer.universe import WATCHLIST
 from stock_analyzer import sectors as sct
 from stock_analyzer import options as opt
 from stock_analyzer import positions as posn
+from stock_analyzer import strategy as strat
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'screen_results.json')
 IVH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'iv_history.json')
@@ -38,6 +39,10 @@ def screen_one(tk):
         tier = assign_screen_tier(moat['moat_rating'], rf['risk_score'],
                                   r['qualitative']['moat_performance']['performance'],
                                   nrr, infl, moat.get('circumvention_delta', 0))
+        info = r['data'].get('info') or {}
+        pdat = r['data'].get('price_data')
+        closes = ([float(x) for x in pdat['Close'].dropna().tolist()]
+                  if pdat is not None and getattr(pdat, 'empty', True) is False and 'Close' in pdat else [])
         return {
             'ticker': tk, 'name': r['data']['name'], 'nob': r['nob']['name'],
             'moat': round(moat['moat_rating'], 1), 'circ_delta': moat.get('circumvention_delta', 0),
@@ -46,6 +51,8 @@ def screen_one(tk):
             'nrr': round(nrr) if nrr is not None else None, 'fwd_inflection': infl,
             'conviction': r['thesis']['conviction'], 'price': r['data']['price'],
             'sector': r['data']['sector'], 'tier': tier,
+            'factors': strat.stock_factor_raw(info, closes),
+            'trend': strat.trend_signal(closes),
         }
     except Exception:
         return None
@@ -198,6 +205,29 @@ def main():
     print(f"  positions: {len(positions)} tracked, "
           f"{sum(1 for r in pos_rows if r['actionable'])} need action", flush=True)
 
+    # Multi-factor ranking + trend / market regime (systematic-strategy signals).
+    ranked = strat.rank_universe([r for r in rows if r.get('factors')])
+    factor_rows = [{
+        'ticker': r['ticker'], 'name': r.get('name'), 'sector': r.get('sector'), 'price': r.get('price'),
+        'composite': round(r['composite'], 2) if r.get('composite') is not None else None,
+        'z': {k: (round(v, 2) if v is not None else None) for k, v in (r.get('z') or {}).items()},
+        'trend': (r.get('trend') or {}).get('signal'),
+    } for r in ranked]
+    regime = strat.regime_gauge([r.get('trend') for r in rows if r.get('trend')])
+    trends = {}
+    for sym, nm in (('SPY', 'S&P 500'), ('DBMF', 'Managed futures (DBMF)'),
+                    ('KMLM', 'Managed futures (KMLM)'), ('IEF', 'US 10y Treasuries')):
+        try:
+            h = _yf_ticker(sym).history(period='1y')
+            cl = [float(x) for x in h['Close'].dropna().tolist()] if h is not None and not h.empty else []
+            t = strat.trend_signal(cl)
+            trends[sym] = {'name': nm, 'signal': t['signal'],
+                           'pct_vs_sma': round(t['pct_vs_sma'], 1) if t['pct_vs_sma'] is not None else None}
+        except Exception:
+            pass
+    print(f"  strategy: ranked {len(factor_rows)} names; "
+          f"regime {regime.get('pct_up')}% above 200d", flush=True)
+
     payload = {
         'generated_at': datetime.now().isoformat(timespec='seconds'),
         'generated_human': datetime.now().strftime('%d %b %Y, %H:%M'),
@@ -206,6 +236,8 @@ def main():
         'sectors': sector_data,
         'options': {'analysed': len(opt_rows), 'ideas': ideas[:40]},
         'position_alerts': pos_rows,
+        'strategy': {'factor_rank': factor_rows[:50], 'regime': regime, 'trends': trends,
+                     'weights': strat.DEFAULT_FACTOR_WEIGHTS},
     }
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, 'w', encoding='utf-8') as f:

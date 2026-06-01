@@ -1114,6 +1114,118 @@ def _render_position_alerts(rows):
             unsafe_allow_html=True)
 
 
+def _zc(v):
+    """A coloured z-score cell for the factor table."""
+    if v is None:
+        return '<td>—</td>'
+    c = 'var(--pos)' if v > 0.25 else ('var(--neg)' if v < -0.25 else 'var(--muted)')
+    return f'<td style="color:{c}; font-weight:600;">{v:+.1f}</td>'
+
+
+def _render_factor_rank(sb):
+    fr = (sb or {}).get('factor_rank') or []
+    sectlabel("Multi-factor rank")
+    if not fr:
+        st.caption("No factor ranking in the latest scan yet (the nightly job populates it). It's a fixed-weight "
+                   "value + momentum + quality + low-vol composite. Informational, not advice.")
+        return
+    st.caption("Your universe ranked by a fixed-weight value + momentum + quality + low-vol composite "
+               "(z-scored across the universe — no factor timing). Treat it as a tilt, not a guarantee: published "
+               "factor edges decay roughly half out-of-sample. Informational, not advice.")
+    rows_html = []
+    for i, r in enumerate(fr[:25], 1):
+        z = r.get('z') or {}
+        comp = r.get('composite')
+        comp_s = f'{comp:+.2f}' if comp is not None else '—'
+        tr = r.get('trend')
+        tr_pill = pill('▲ up', 'pos') if tr == 'up' else (pill('▼ down', 'neg') if tr == 'down' else '—')
+        rows_html.append(
+            f'<tr><td>{i}</td><td><b>{r.get("ticker")}</b></td>'
+            f'<td style="font-weight:800; color:var(--navy);">{comp_s}</td>'
+            + _zc(z.get('value')) + _zc(z.get('momentum')) + _zc(z.get('quality')) + _zc(z.get('lowvol'))
+            + f'<td>{tr_pill}</td>'
+            f'<td style="color:var(--muted); font-size:0.8rem;">{(r.get("sector") or "")[:16]}</td></tr>')
+    head = ('<tr><th>#</th><th>Ticker</th><th>Composite</th><th>Value</th><th>Mom</th><th>Quality</th>'
+            '<th>Low-vol</th><th>Trend</th><th>Sector</th></tr>')
+    st.markdown(f'<table class="clean">{head}{"".join(rows_html)}</table>', unsafe_allow_html=True)
+
+
+def _render_regime(sb):
+    reg = (sb or {}).get('regime') or {}
+    trends = (sb or {}).get('trends') or {}
+    sectlabel("Market trend & regime")
+    pct = reg.get('pct_up')
+    if pct is not None:
+        on = bool(reg.get('risk_on'))
+        col = 'var(--pos)' if on else 'var(--neg)'
+        st.markdown(
+            f'<div class="card" style="border-left:4px solid {col};">'
+            '<div style="display:flex; align-items:baseline; gap:12px; flex-wrap:wrap;">'
+            f'<span style="font-size:1.4rem; font-weight:800; color:{col};">{"RISK-ON" if on else "RISK-OFF"}</span>'
+            f'<span style="color:var(--slate);">{pct:.0f}% of {reg.get("n")} tracked names are above their 200-day average</span></div>'
+            '<div style="font-size:0.82rem; color:var(--muted); margin-top:6px;">A breadth read on the 200-day trend '
+            '(the daily analogue of Faber\'s 10-month timing rule). A risk gauge, not a buy/sell signal.</div></div>',
+            unsafe_allow_html=True)
+    else:
+        st.caption("The regime gauge populates from the nightly scan.")
+    if trends:
+        cells = []
+        for sym in ('SPY', 'DBMF', 'KMLM', 'IEF'):
+            t = trends.get(sym)
+            if not t:
+                continue
+            sig, pv = t.get('signal'), t.get('pct_vs_sma')
+            c = 'var(--pos)' if sig == 'up' else ('var(--neg)' if sig == 'down' else 'var(--muted)')
+            arrow = '▲' if sig == 'up' else ('▼' if sig == 'down' else '—')
+            pvs = f'{pv:+.1f}% vs 200d' if pv is not None else ''
+            cells.append(
+                '<div class="card" style="padding:11px 14px;">'
+                f'<div style="font-size:0.72rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--muted);">{t.get("name")}</div>'
+                f'<div style="font-size:1.05rem; font-weight:800; color:{c};">{arrow} {sym}</div>'
+                f'<div style="font-size:0.78rem; color:var(--faint);">{pvs}</div></div>')
+        st.markdown('<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-top:10px;">'
+                    + ''.join(cells) + '</div>', unsafe_allow_html=True)
+        st.caption("DBMF / KMLM are managed-futures (trend-following) ETFs — the convex 'crisis-alpha' complement to "
+                   "option-selling. Informational, not advice.")
+
+
+def _render_strategy_mix():
+    sectlabel("Strategy mix — the evidence-based design")
+    st.markdown(
+        '<div class="card"><div style="font-size:0.92rem; color:var(--slate); line-height:1.6;">'
+        'The verified research verdict: no single systematic strategy cleanly <b>beats</b> option-selling as a '
+        'replacement — the best designs <b>combine complementary payoffs</b>. Option-selling is '
+        '<b>concave / short-volatility</b> (earns premium in calm markets, suffers in crashes). Trend-following is '
+        '<b>convex / long-volatility</b> "crisis alpha" (profits in sustained bears <i>and</i> bulls, lags in choppy '
+        'reversals), ~uncorrelated with stocks. Multi-factor equity (value + momentum + quality) is the higher-return '
+        'core. Held together, their worst regimes offset.</div></div>', unsafe_allow_html=True)
+    buckets = [
+        ('1 · Factor / quality equity core', 'Value + momentum + quality tilt (the rank below) — your return engine.', 'var(--navy2)'),
+        ('2 · Trend / managed-futures sleeve', 'A managed-futures ETF (DBMF / KMLM) or a 200-day trend overlay — convex crisis-alpha, ~0 correlation to stocks.', 'var(--accent)'),
+        ('3 · Option-selling income sleeve', 'Cash-secured puts / covered calls on quality names when IV is rich (the Options tab) — harvests the volatility risk premium.', 'var(--pos)'),
+    ]
+    st.markdown(''.join(
+        f'<div class="card" style="border-left:4px solid {c}; margin-top:8px;">'
+        f'<div style="font-weight:800; color:var(--navy);">{t}</div>'
+        f'<div style="font-size:0.85rem; color:var(--slate); margin-top:3px;">{d}</div></div>'
+        for t, d, c in buckets), unsafe_allow_html=True)
+    st.caption("Illustrative framework only — not a recommended allocation or financial advice; sizing is your call. "
+               "Honest caveats: gross backtests overstate net returns; factor edges decay ~half out-of-sample; trend's "
+               "real-fund Sharpe (~0.3–0.9) is well below its ~1.8 gross backtest; and don't try to time factors.")
+
+
+def render_strategy():
+    saved = _load_saved_screen()
+    sb = (saved or {}).get('strategy')
+    if saved:
+        st.caption(f"Signals from the nightly scan · {saved.get('generated_human', '?')}.")
+    _render_regime(sb)
+    st.markdown("---")
+    _render_strategy_mix()
+    st.markdown("---")
+    _render_factor_rank(sb)
+
+
 def render_screener():
     saved = _load_saved_screen()
     cc = st.columns([0.62, 0.38])
@@ -1643,8 +1755,8 @@ if not ticker:
     st.markdown("<br>", unsafe_allow_html=True)
     st.caption("Enter a ticker above for a single-stock deep dive — or work with your whole book below.")
 
-    tab_ai, tab_wl, tab_scr, tab_macro, tab_pf = st.tabs(
-        ["Ask AI", "Watchlist", "Screener", "Macro", "Portfolio"])
+    tab_ai, tab_wl, tab_scr, tab_strat, tab_macro, tab_pf = st.tabs(
+        ["Ask AI", "Watchlist", "Screener", "Strategy", "Macro", "Portfolio"])
 
     with tab_wl:
         st.markdown("#### Your watchlist")
@@ -1711,6 +1823,12 @@ if not ticker:
     with tab_scr:
         st.markdown("#### High-conviction screener")
         render_screener()
+
+    with tab_strat:
+        st.markdown("#### Systematic strategy")
+        st.caption("Research-backed signals — a multi-factor stock rank, a 200-day trend/regime read, and the "
+                   "complementary 'factor + trend + option-selling' design. Informational, not financial advice.")
+        render_strategy()
 
     with tab_macro:
         st.markdown("#### Macro & sector news")

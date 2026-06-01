@@ -22,6 +22,7 @@ from stock_analyzer import sectors as sct
 from stock_analyzer import watchlist as wl
 from stock_analyzer import options as opt
 from stock_analyzer import positions as posn
+from stock_analyzer import strategy as strat
 
 PASS, FAIL = 0, 0
 
@@ -416,6 +417,48 @@ check("alert: LEAPS roll fires inside 90 DTE",
 _ontrack = opt.position_alerts(_csp, {'mid': 3.8, 'delta': -0.25, 'spot': 325, 'dte': 40, 'earnings_in_days': None})
 check("alert: on-track when nothing triggers",
       any(x['label'] == 'On track' for x in _ontrack) and not [x for x in _ontrack if x['level'] in ('red', 'amber')])
+
+print("\n[16] Systematic strategy")
+_up = [100 * (1.0008 ** i) for i in range(300)]                      # clean uptrend
+_dn = [100 * (0.999 ** i) for i in range(300)]                       # clean downtrend
+_calm = [100 + i * 0.03 + ((-1) ** i) * 0.4 for i in range(300)]     # mild uptrend + small noise
+_whippy = [100 * (1 + 0.04 * ((-1) ** i)) for i in range(300)]       # big swings
+check("value_raw: cheaper (low PE) scores higher",
+      strat.value_raw({'trailingPE': 10, 'marketCap': 1e9, 'freeCashflow': 5e7})
+      > strat.value_raw({'trailingPE': 50, 'marketCap': 1e9, 'freeCashflow': 5e7}))
+check("value_raw None when no inputs", strat.value_raw({}) is None)
+check("momentum_12_1 positive for an uptrend", strat.momentum_12_1(_up) > 0)
+check("momentum_12_1 negative for a downtrend", strat.momentum_12_1(_dn) < 0)
+check("momentum_12_1 None when too short", strat.momentum_12_1([100] * 50) is None)
+check("realized_vol positive + modest for a calm series", 0 < strat.realized_vol(_calm) < 0.3)
+check("quality_raw rewards ROE + margin",
+      strat.quality_raw({'returnOnEquity': 0.3, 'profitMargins': 0.2})
+      > strat.quality_raw({'returnOnEquity': 0.05, 'profitMargins': 0.02}))
+check("quality_raw penalises leverage",
+      strat.quality_raw({'returnOnEquity': 0.3, 'profitMargins': 0.2, 'debtToEquity': 200})
+      < strat.quality_raw({'returnOnEquity': 0.3, 'profitMargins': 0.2, 'debtToEquity': 0}))
+check("lowvol_raw higher (less negative) for a calmer stock", strat.lowvol_raw(_calm) > strat.lowvol_raw(_whippy))
+_z = strat.zscores([1.0, 2.0, 3.0, None])
+check("zscores: mean ~0, None preserved", abs(sum(v for v in _z if v is not None)) < 1e-9 and _z[3] is None)
+_stocks = [
+    {'ticker': 'A', 'factors': {'value': 0.10, 'momentum': 0.30, 'quality': 0.5, 'lowvol': -0.1}},
+    {'ticker': 'B', 'factors': {'value': 0.02, 'momentum': -0.10, 'quality': 0.1, 'lowvol': -0.4}},
+    {'ticker': 'C', 'factors': {'value': 0.06, 'momentum': 0.10, 'quality': 0.3, 'lowvol': -0.2}},
+]
+_ranked = strat.rank_universe(_stocks)
+check("rank_universe sorts best composite first", _ranked[0]['ticker'] == 'A' and _ranked[-1]['ticker'] == 'B')
+check("rank_universe adds composite + per-factor z",
+      _ranked[0]['composite'] is not None and set(_ranked[0]['z']) == set(strat.FACTORS))
+check("rank_universe tolerates all-missing factors",
+      strat.rank_universe([{'ticker': 'X', 'factors': {'value': None, 'momentum': None, 'quality': None, 'lowvol': None}}])[0]['composite'] is None)
+check("trend_signal up when price above its SMA",
+      strat.trend_signal(_up)['signal'] == 'up' and strat.trend_signal(_up)['above'] is True)
+check("trend_signal down when price below its SMA", strat.trend_signal(_dn)['signal'] == 'down')
+check("trend_signal pct_vs_sma positive in an uptrend", strat.trend_signal(_up)['pct_vs_sma'] > 0)
+_reg = strat.regime_gauge([{'signal': 'up'}, {'signal': 'up'}, {'signal': 'down'}])
+check("regime_gauge breadth + risk_on", abs(_reg['pct_up'] - 66.6667) < 0.1 and _reg['risk_on'] is True and _reg['n'] == 3)
+check("regime_gauge risk-off when majority down",
+      strat.regime_gauge([{'signal': 'down'}, {'signal': 'down'}, {'signal': 'up'}])['risk_on'] is False)
 
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 sys.exit(1 if FAIL else 0)
