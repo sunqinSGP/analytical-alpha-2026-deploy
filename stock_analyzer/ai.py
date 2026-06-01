@@ -207,3 +207,88 @@ def explain_sector_rebound(api_key, oversold_sectors, news_items, model=DEFAULT_
     except Exception:
         pass
     return {'_raw': raw}
+
+
+# ---------------------------------------------------------------- options coach
+OPTIONS_COACH_INSTRUCTION = (
+    "You are a conservative options strategist embedded in an equity-analysis app. Below is the stock's "
+    "fundamental read plus its current options structure and the candidates a RULE ENGINE selected "
+    "(cash-secured put, covered call, long LEAPS) from the user's settings. Explain, plainly and briefly, "
+    "what the options market is implying and how sound each idea looks, grounding every statement in the "
+    "numbers given. The durable edge in premium selling is the volatility risk premium — selling when "
+    "implied vol is rich versus realised — but it CAPS upside, is NOT a hedge, and loses in sharp moves in "
+    "EITHER direction; long LEAPS risk total loss of the premium paid. Be balanced and flag the single key "
+    "risk. This is informational analysis, NOT a personalised instruction to trade.\n"
+    "Respond with ONLY a JSON object (no prose, no markdown, no code fence) of this exact shape:\n"
+    '{\n'
+    '  "read": "<1-2 sentences: is implied vol rich or cheap vs realised, and the overall setup>",\n'
+    '  "income": "<1-2 sentences on the cash-secured-put / covered-call idea, or why it is on hold>",\n'
+    '  "growth": "<1-2 sentences on the LEAPS idea, or why it is not attractive right now>",\n'
+    '  "caution": "<one sentence on the single most important risk here>"\n'
+    '}'
+)
+
+
+def _ofmt(v, suffix='', dp=1):
+    if v is None:
+        return 'n/a'
+    try:
+        return f"{float(v):.{dp}f}{suffix}"
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def options_context(result, oe):
+    """Compact factual context: the stock + its options structure + the rule-engine candidates.
+    `oe` is the dict returned by stock_analyzer.options.evaluate()."""
+    d = result.get('data', {})
+    th = result.get('thesis', {})
+    vol = oe.get('vol', {})
+    g = oe.get('gates', {})
+    iv_pct = (vol.get('atm_iv') * 100) if vol.get('atm_iv') else None
+    rv_pct = (vol.get('realized_vol') * 100) if vol.get('realized_vol') else None
+    lines = [
+        f"Stock: {d.get('name')} ({result.get('ticker')}) — {d.get('sector')} / {d.get('industry')}",
+        f"App conviction: {th.get('conviction')}. Spot: {_ofmt(oe.get('spot'), '', 2)}.",
+        f"ATM implied vol {_ofmt(iv_pct, '%')}; 30d realised vol {_ofmt(rv_pct, '%')}; "
+        f"IV/RV {_ofmt(vol.get('iv_rv'), 'x', 2)}; IV-Rank {_ofmt(vol.get('iv_rank'))}.",
+        f"Premium rich enough to sell? {'YES' if g.get('premium_rich') else 'NO'}. "
+        f"Earnings in days: {g.get('earnings_in_days')}.",
+    ]
+    csp = oe.get('csp')
+    if csp:
+        lines.append(
+            f"Rule CASH-SECURED PUT: sell {_ofmt(csp['strike'], '', 0)} put, {csp['dte']}d, "
+            f"delta {_ofmt(csp['delta'], '', 2)}, premium ${_ofmt(csp['mid'], '', 2)}, "
+            f"annualised yield {_ofmt(csp['ann_yield_pct'], '%')}, breakeven {_ofmt(csp['breakeven'], '', 2)} "
+            f"({_ofmt(csp['downside_buffer_pct'], '%')} downside buffer).")
+    cc = oe.get('covered_call')
+    if cc:
+        lines.append(
+            f"Rule COVERED CALL: sell {_ofmt(cc['strike'], '', 0)} call, {cc['dte']}d, "
+            f"delta {_ofmt(cc['delta'], '', 2)}, premium ${_ofmt(cc['mid'], '', 2)}, "
+            f"annualised yield {_ofmt(cc['ann_yield_pct'], '%')}, caps upside at +{_ofmt(cc['otm_pct'], '%')}.")
+    lp = oe.get('leaps')
+    if lp:
+        lines.append(
+            f"Rule LEAPS: buy {_ofmt(lp['strike'], '', 0)} call, {lp['dte']}d, delta {_ofmt(lp['delta'], '', 2)}, "
+            f"debit ${_ofmt(lp['mid'], '', 2)}, breakeven needs +{_ofmt(lp['breakeven_move_pct'], '%')}, "
+            f"time premium {_ofmt(lp['extrinsic_pct'], '%')} of debit.")
+    for n in oe.get('notes', []):
+        lines.append(f"Note: {n}")
+    return "\n".join(str(x) for x in lines)
+
+
+def explain_options_setup(api_key, result, oe, model=DEFAULT_MODEL):
+    """Return a structured dict the UI can style: {read, income, growth, caution}.
+    Falls back to {'_raw': <text>} if the model doesn't return valid JSON."""
+    msgs = [{"role": "user", "content": options_context(result, oe) + "\n\nGive your read."}]
+    raw = complete(api_key, msgs, system=GUARDRAIL + "\n\n" + OPTIONS_COACH_INSTRUCTION,
+                   model=model, max_tokens=700, temperature=0.4, json_mode=True)
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and ('read' in data or 'income' in data):
+            return data
+    except Exception:
+        pass
+    return {'_raw': raw}

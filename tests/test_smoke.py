@@ -20,6 +20,7 @@ from stock_analyzer import ai
 from stock_analyzer import news as newsmod
 from stock_analyzer import sectors as sct
 from stock_analyzer import watchlist as wl
+from stock_analyzer import options as opt
 
 PASS, FAIL = 0, 0
 
@@ -299,6 +300,80 @@ finally:
     if os.path.exists(_wlp):
         os.remove(_wlp)
 check("watchlist load tolerates a missing file", wl.load('does/not/exist.json') == [])
+
+print("\n[14] Options")
+from datetime import date as _date, timedelta as _td
+
+
+def _mk_contracts(S, T, kind, strikes, sigma=0.30, r=0.043):
+    """Synthesise a yfinance-shaped chain (priced off Black-Scholes, tight liquid market)."""
+    out = []
+    for K in strikes:
+        px = max(opt.bs_price(S, K, T, r, sigma, kind) or 0.0, 0.01)
+        out.append({'strike': K, 'bid': round(px * 0.98, 2), 'ask': round(px * 1.02, 2),
+                    'last': round(px, 2), 'volume': 150, 'oi': 800, 'iv': sigma})
+    return out
+
+
+# Black-Scholes sanity
+check("BS call delta ~0.5 at-the-money", abs(opt.bs_delta(100, 100, 0.5, 0.04, 0.3, 'call') - 0.5) < 0.12)
+check("BS deep-ITM call delta is high", opt.bs_delta(100, 70, 1.0, 0.04, 0.3, 'call') > 0.85)
+check("BS put delta is negative", opt.bs_delta(100, 100, 0.5, 0.04, 0.3, 'put') < 0)
+check("BS degenerate inputs return None", opt.bs_delta(100, 100, 0, 0.04, 0.3, 'call') is None)
+# realised vol + IV rank + the 'rich' gate
+_cl = [100 * (1 + 0.0004 * ((-1) ** i)) for i in range(60)]    # very low realised vol
+check("realized_vol returns a small positive number", 0 < (opt.realized_vol(_cl) or 0) < 0.1)
+check("iv_rank None when history too short", opt.iv_rank(0.3, [0.2, 0.25]) is None)
+check("iv_rank ~100 when current exceeds history", opt.iv_rank(3.0, [0.1 * i for i in range(1, 30)]) >= 99)
+check("iv_rank low when current near the bottom", opt.iv_rank(0.2, [0.1 * i for i in range(1, 30)]) < 20)
+check("premium_is_rich via IV/RV", opt.premium_is_rich(0.30, 0.20, None, opt.DEFAULT_PARAMS) is True)
+check("premium NOT rich when IV ~= RV", opt.premium_is_rich(0.20, 0.20, None, opt.DEFAULT_PARAMS) is False)
+check("premium_is_rich prefers IV-Rank when present", opt.premium_is_rich(0.2, 0.2, 55, opt.DEFAULT_PARAMS) is True)
+# contract metrics
+_c = {'strike': 95, 'bid': 2.0, 'ask': 2.1, 'last': 2.05, 'volume': 100, 'oi': 800, 'iv': 0.3}
+check("mid_price averages bid/ask", abs(opt.mid_price(_c) - 2.05) < 1e-9)
+check("spread_pct small for a tight market", opt.spread_pct(_c) < 6)
+check("is_liquid true for deep OI + tight spread", opt.is_liquid(_c, opt.DEFAULT_PARAMS) is True)
+check("is_liquid false when OI below the floor", opt.is_liquid({**_c, 'oi': 10}, opt.DEFAULT_PARAMS) is False)
+# finders on a canned chain
+_S = 100.0
+_strk = [70 + 2 * i for i in range(31)]                        # 70..130
+_csp = opt.find_csp(_mk_contracts(_S, 37 / 365, 'put', _strk), _S, 37, opt.DEFAULT_PARAMS)
+check("find_csp returns an OTM put below spot", bool(_csp) and _csp['strike'] < _S)
+check("find_csp delta near the 0.30 target", bool(_csp) and 0.15 <= abs(_csp['delta']) <= 0.45)
+check("find_csp annualised yield is positive", bool(_csp) and _csp['ann_yield_pct'] > 0)
+check("find_csp breakeven below the strike", bool(_csp) and _csp['breakeven'] < _csp['strike'])
+_calls = _mk_contracts(_S, 37 / 365, 'call', _strk)
+_cc = opt.find_covered_call(_calls, _S, 37, opt.DEFAULT_PARAMS)
+check("find_covered_call returns an OTM call at/above spot", bool(_cc) and _cc['strike'] >= _S)
+check("covered call respects the cost-basis floor",
+      opt.find_covered_call(_calls, _S, 37, opt.DEFAULT_PARAMS, cost_basis=115)['strike'] >= 115)
+_lp = opt.find_leaps(_mk_contracts(_S, 400 / 365, 'call', _strk), _S, 400, opt.DEFAULT_PARAMS)
+check("find_leaps returns a deep-ITM call below spot", bool(_lp) and _lp['strike'] < _S)
+check("find_leaps delta near the 0.75 target", bool(_lp) and 0.6 <= _lp['delta'] <= 0.9)
+check("find_leaps extrinsic <= debit", bool(_lp) and _lp['extrinsic'] <= _lp['mid'] + 1e-6)
+# end-to-end evaluate()
+_today = _date.today()
+_chains = {(_today + _td(days=37)).isoformat():
+           {'calls': _mk_contracts(_S, 37 / 365, 'call', _strk), 'puts': _mk_contracts(_S, 37 / 365, 'put', _strk)},
+           (_today + _td(days=400)).isoformat():
+           {'calls': _mk_contracts(_S, 400 / 365, 'call', _strk), 'puts': _mk_contracts(_S, 400 / 365, 'put', _strk)}}
+_ev = opt.evaluate(_chains, _S, closes=_cl, params=opt.DEFAULT_PARAMS, today=_today)
+check("evaluate flags premium rich when IV >> realised", _ev['gates']['premium_rich'] is True)
+check("evaluate finds a CSP when premium is rich", _ev['csp'] is not None)
+check("evaluate finds a LEAPS when a 12m+ expiry exists", _ev['leaps'] is not None)
+_ev2 = opt.evaluate(_chains, _S, closes=_cl, params=opt.DEFAULT_PARAMS, earnings_in_days=5, today=_today)
+check("evaluate skips the income sleeve across earnings",
+      _ev2['csp'] is None and _ev2['gates']['earnings_soon'] is True)
+_hivol = [100 * (1 + 0.04 * ((-1) ** i)) for i in range(60)]   # whippy -> high realised vol
+_ev3 = opt.evaluate(_chains, _S, closes=_hivol, params=opt.DEFAULT_PARAMS, today=_today)
+check("evaluate holds the income sleeve when premium not rich",
+      _ev3['gates']['premium_rich'] is False and _ev3['csp'] is None)
+_octx = ai.options_context({'data': {'name': 'Canned', 'sector': 'Tech', 'industry': 'SW'},
+                            'ticker': 'CAN', 'thesis': {'conviction': 'HIGH CONVICTION'}}, _ev)
+check("options_context embeds the ticker + IV read", 'CAN' in _octx and 'IV' in _octx)
+check("options coach prompt requests JSON read/income/growth",
+      '"read"' in ai.OPTIONS_COACH_INSTRUCTION and '"growth"' in ai.OPTIONS_COACH_INSTRUCTION)
 
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 sys.exit(1 if FAIL else 0)

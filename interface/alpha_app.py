@@ -19,7 +19,7 @@ from stock_analyzer.alpha_engine import (
 )
 from stock_analyzer.verdict import CONV_COLORS, build_factor_attribution, recommendation_for
 from stock_analyzer import portfolio as pf
-from stock_analyzer import ai, news, sectors as sct
+from stock_analyzer import ai, news, sectors as sct, options as opt
 from stock_analyzer import watchlist as wl
 
 st.set_page_config(page_title="Analytical Alpha 2026", page_icon="◆",
@@ -37,6 +37,12 @@ def cached_fetch(tkr):
 @st.cache_data(ttl=3600, show_spinner=False)
 def cached_analysis(tkr, weight_pct, framework):
     return alpha_analysis(tkr, current_weight_pct=weight_pct, framework=framework, data=cached_fetch(tkr))
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_option_chain(tkr):
+    """Option chains + spot/earnings meta (shorter TTL — options data is more time-sensitive)."""
+    return opt.fetch_option_chain(tkr)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -557,6 +563,201 @@ def render_holding(held, ticker, result, price, currency, cs):
         <span style="color:var(--slate); font-size:0.88rem;">{asub}</span>
       </div>
     </div>""", unsafe_allow_html=True)
+
+
+# ===========================================================================
+# Options module (Phase 1) — per-stock income (CSP / covered call / wheel) + LEAPS.
+# Rule engine in stock_analyzer/options.py; evidence/caveats in docs/options_strategy.md.
+# ===========================================================================
+def _opt_params_ui():
+    """Adjustable strategy parameters. Defaults are practitioner conventions (NOT proven edge).
+    Widget keys are global so your settings persist across tickers. Returns a params dict."""
+    p = dict(opt.DEFAULT_PARAMS)
+    with st.expander("⚙ Strategy settings — tune the rules (defaults are practitioner conventions, not proven edge)"):
+        c = st.columns(4)
+        p['csp_delta'] = c[0].number_input("Short put/call delta", 0.05, 0.50, float(p['csp_delta']), 0.01,
+                                           key='opt_delta', help="Target delta for cash-secured puts & covered calls (~0.30 convention; 0.16 = safer)")
+        p['cc_delta'] = p['csp_delta']
+        p['csp_dte_min'] = int(c[1].number_input("DTE min", 7, 120, int(p['csp_dte_min']), 1, key='opt_dte_min'))
+        p['csp_dte_max'] = int(c[2].number_input("DTE max", 14, 180, int(p['csp_dte_max']), 1, key='opt_dte_max'))
+        p['cc_dte_min'], p['cc_dte_max'] = p['csp_dte_min'], p['csp_dte_max']
+        p['leaps_delta'] = c[3].number_input("LEAPS delta", 0.50, 0.90, float(p['leaps_delta']), 0.01,
+                                             key='opt_leaps_delta', help="Deep-ITM target for long LEAPS (~0.75)")
+        c2 = st.columns(4)
+        p['iv_rank_min'] = int(c2[0].number_input("IV-Rank gate", 0, 100, int(p['iv_rank_min']), 5,
+                                                  key='opt_ivr', help="Sell premium only when IV-Rank ≥ this (once history exists)"))
+        p['iv_rv_min'] = c2[1].number_input("IV / realized gate", 1.0, 3.0, float(p['iv_rv_min']), 0.05,
+                                            key='opt_ivrv', help="...or when ATM IV ÷ realized vol ≥ this (immediate VRP proxy)")
+        p['min_open_interest'] = int(c2[2].number_input("Min open interest", 0, 5000, int(p['min_open_interest']), 50, key='opt_oi'))
+        p['max_spread_pct'] = c2[3].number_input("Max bid-ask spread %", 1.0, 50.0, float(p['max_spread_pct']), 1.0, key='opt_spread')
+    return p
+
+
+def _opt_row(label, value, color='var(--ink)'):
+    return (f'<div style="display:flex; justify-content:space-between; gap:10px; padding:3px 0; font-size:0.84rem;">'
+            f'<span style="color:var(--muted);">{label}</span>'
+            f'<span style="font-weight:700; color:{color}; font-variant-numeric:tabular-nums; text-align:right;">{value}</span></div>')
+
+
+def _opt_card_html(title, tag, tag_kind, head, rows, foot):
+    return ('<div class="card" style="height:100%;">'
+            f'<div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">'
+            f'<span style="font-weight:800; color:var(--navy); font-size:0.98rem;">{title}</span>{pill(tag, tag_kind)}</div>'
+            f'<div style="font-weight:700; color:var(--ink); font-size:0.92rem; margin-bottom:6px;">{head}</div>'
+            f'{rows}<div style="margin-top:8px; font-size:0.74rem; color:var(--faint); line-height:1.45;">{foot}</div></div>')
+
+
+def _opt_hold_html(title, tag, tag_kind, reason):
+    return ('<div class="card" style="height:100%; opacity:0.85;">'
+            f'<div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">'
+            f'<span style="font-weight:800; color:var(--navy); font-size:0.98rem;">{title}</span>{pill(tag, tag_kind)}</div>'
+            f'<div style="color:var(--muted); font-size:0.86rem;">{reason}</div></div>')
+
+
+def _render_income_card(title, tag, cand, kind, oe, params, cs):
+    if not cand:
+        reason = ("On hold — premium not rich enough to sell." if not oe['gates']['premium_rich']
+                  else ("Skipped — earnings too close." if oe['gates']['earnings_soon']
+                        else "No liquid contract near the target delta."))
+        st.markdown(_opt_hold_html(title, tag, '', reason), unsafe_allow_html=True)
+        return
+    if kind == 'csp':
+        head = f"Sell {cs}{cand['strike']:.0f} put"
+        rows = (_opt_row("Expiry", f"{cand['dte']}d")
+                + _opt_row("Delta", f"{abs(cand['delta']):.2f}")
+                + _opt_row("Premium", f"{cs}{cand['mid']:.2f} ({cs}{cand['premium_total']:,.0f})")
+                + _opt_row("Annualised yield", f"{cand['ann_yield_pct']:.1f}%", 'var(--pos)')
+                + _opt_row("Breakeven", f"{cs}{cand['breakeven']:.2f} · {cand['downside_buffer_pct']:.1f}% buffer")
+                + _opt_row("Cash to secure", f"{cs}{cand['cash_secured']:,.0f}")
+                + _opt_row("Liquidity", f"OI {cand['oi']:,} · {cand['spread_pct']:.0f}% spr"))
+        foot = (f"Take profit at {params['profit_take_pct']:.0f}% · roll/close at {params['roll_dte']} DTE · "
+                "if assigned, own the shares then sell calls (the wheel).")
+    else:
+        head = f"Sell {cs}{cand['strike']:.0f} call"
+        rows = (_opt_row("Expiry", f"{cand['dte']}d")
+                + _opt_row("Delta", f"{cand['delta']:.2f}")
+                + _opt_row("Premium", f"{cs}{cand['mid']:.2f} ({cs}{cand['premium_total']:,.0f})")
+                + _opt_row("Annualised yield", f"{cand['ann_yield_pct']:.1f}%", 'var(--pos)')
+                + _opt_row("Caps upside at", f"+{cand['otm_pct']:.1f}%", 'var(--amber)')
+                + _opt_row("Max gain if called", f"+{cand['max_gain_if_called_pct']:.1f}%")
+                + _opt_row("Liquidity", f"OI {cand['oi']:,} · {cand['spread_pct']:.0f}% spr"))
+        foot = "Write above your cost basis · roll up/out if challenged · watch ex-dividend assignment."
+    st.markdown(_opt_card_html(title, tag, '', head, rows, foot), unsafe_allow_html=True)
+
+
+def _render_leaps_card(cand, params, cs):
+    title, tag = "LEAPS call", "Growth"
+    if not cand:
+        st.markdown(_opt_hold_html(title, tag, 'accent',
+                    "No 12-month+ deep-ITM call near the target delta (or chains too thin)."),
+                    unsafe_allow_html=True)
+        return
+    ce = cand['capital_efficiency']
+    rows = (_opt_row("Expiry", f"{cand['dte']}d")
+            + _opt_row("Delta", f"{cand['delta']:.2f}")
+            + _opt_row("Debit", f"{cs}{cand['mid']:.2f} ({cs}{cand['debit_total']:,.0f})")
+            + _opt_row("Breakeven move", f"+{cand['breakeven_move_pct']:.1f}%", 'var(--amber)')
+            + _opt_row("Time premium", f"{cand['extrinsic_pct']:.1f}% of debit")
+            + _opt_row("Capital efficiency", f"{ce:.1f}×" if ce else "N/A")
+            + _opt_row("Liquidity", f"OI {cand['oi']:,} · {cand['spread_pct']:.0f}% spr"))
+    foot = (f"Roll before 90 DTE (theta accelerates) · size for total loss (≤{params['max_pos_pct']:.0f}% each) · "
+            "prefer lower IV at entry.")
+    st.markdown(_opt_card_html(title, tag, 'accent', f"Buy {cs}{cand['strike']:.0f} call", rows, foot),
+                unsafe_allow_html=True)
+
+
+def _render_options_ai(rd):
+    if not isinstance(rd, dict) or rd.get('_raw') is not None:
+        st.markdown(rd.get('_raw', '') if isinstance(rd, dict) else str(rd))
+        return
+
+    def blk(label, text, bar):
+        text = (text or '').strip()
+        if not text:
+            return ''
+        return ('<div style="margin-top:9px; padding-left:11px; border-left:3px solid ' + bar + ';">'
+                f'<div class="sectlabel" style="margin:0 0 2px;">{label}</div>'
+                f'<div style="font-size:0.9rem; color:var(--slate); line-height:1.55;">{text}</div></div>')
+    body = (blk("The read", rd.get('read'), 'var(--accent)')
+            + blk("Income sleeve", rd.get('income'), '#bbf7d0')
+            + blk("Growth (LEAPS)", rd.get('growth'), 'var(--accent-line)')
+            + blk("Key caution", rd.get('caution'), '#fecaca'))
+    st.markdown(f'<div class="card">{body or "No structured read returned."}</div>', unsafe_allow_html=True)
+
+
+def render_options_tab(ticker, result, data, cs):
+    st.caption("Rule-based options signals — informational, not advice. The durable edge in selling premium is "
+               "the volatility risk premium: it smooths returns but caps upside and is NOT a hedge. LEAPS risk "
+               "total loss of the premium paid. Defaults below are practitioner conventions you can change.")
+    params = _opt_params_ui()
+    try:
+        with st.spinner("Fetching option chains…"):
+            chains, meta = cached_option_chain(ticker)
+    except Exception as e:
+        st.error(f"Couldn't fetch option chains: {e}")
+        return
+    if not chains:
+        st.info("No listed options found for this ticker (or data is temporarily unavailable). "
+                "Liquid US stocks & ETFs have the deepest, most reliable chains.")
+        return
+
+    spot = meta.get('spot') or data.get('price') or 0
+    closes = []
+    pdat = data.get('price_data')
+    if pdat is not None and getattr(pdat, 'empty', True) is False and 'Close' in pdat:
+        closes = [float(x) for x in pdat['Close'].dropna().tolist()]
+    oe = opt.evaluate(chains, spot, closes=closes, iv_history=None, params=params,
+                      earnings_in_days=meta.get('earnings_in_days'), today=datetime.now().date())
+    vol, g = oe['vol'], oe['gates']
+
+    sectlabel("Volatility read")
+    mc = st.columns(4)
+    _stat(mc[0], "ATM implied vol", fmt_pct(vol['atm_iv'] * 100) if vol['atm_iv'] else "N/A")
+    _stat(mc[1], "Realized vol · 30d", fmt_pct(vol['realized_vol'] * 100) if vol['realized_vol'] else "N/A")
+    ivrv = vol['iv_rv']
+    _stat(mc[2], "IV ÷ realized", f"{ivrv:.2f}×" if ivrv else "N/A",
+          'pos' if (ivrv and ivrv >= params['iv_rv_min']) else 'neutral')
+    ivr = vol['iv_rank']
+    _stat(mc[3], "IV-Rank", f"{ivr:.0f}" if ivr is not None else "building…",
+          'pos' if (ivr is not None and ivr >= params['iv_rank_min']) else 'neutral')
+
+    rich = (pill("✓ Premium rich — OK to sell", 'pos') if g['premium_rich']
+            else pill("Premium not rich — selling on hold", 'amber'))
+    earn = pill(f"⚠ Earnings in ~{g['earnings_in_days']}d", 'neg') if g['earnings_soon'] else ''
+    st.markdown(f"<div style='margin:10px 0 2px;'>{rich} {earn}</div>", unsafe_allow_html=True)
+    if ivr is None:
+        st.caption("IV-Rank needs a history of past implied vol — the nightly scan will build it over the "
+                   "coming weeks (Phase 2). Until then, IV ÷ realized vol is the volatility-richness gate.")
+
+    st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+    cols = st.columns(3)
+    with cols[0]:
+        _render_income_card("Cash-secured put", "Income", oe['csp'], 'csp', oe, params, cs)
+    with cols[1]:
+        _render_income_card("Covered call", "Income · wheel", oe['covered_call'], 'cc', oe, params, cs)
+    with cols[2]:
+        _render_leaps_card(oe['leaps'], params, cs)
+
+    if oe['notes']:
+        st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="card" style="border-left:4px solid var(--amber);">'
+                    '<div class="sectlabel" style="margin:0 0 4px;">Why a sleeve is on hold</div>'
+                    + ''.join(f'<div style="font-size:0.84rem; color:var(--slate); margin:3px 0;">• {n}</div>'
+                              for n in oe['notes']) + '</div>', unsafe_allow_html=True)
+
+    st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
+    if st.button("Explain the options setup (AI)", key='opt_ai'):
+        key = _llm_key()
+        if not key:
+            st.info("Add a `deepseek_api_key` to your secrets to enable the AI read.")
+        else:
+            try:
+                with st.spinner("Reading the options setup…"):
+                    rd = ai.explain_options_setup(key, result, oe, model=_llm_model())
+                _render_options_ai(rd)
+                st.caption("AI-generated · informational, not financial advice.")
+            except Exception as e:
+                st.error(f"Couldn't reach the model: {e}")
 
 
 # ===========================================================================
@@ -1444,7 +1645,11 @@ _stat(m[5], "Risk", _rl, {'Low': 'pos', 'Medium': 'amber', 'High': 'neg'}.get(_r
 # TABS
 # ===========================================================================
 st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
-tab_v, tab_f, tab_mr, tab_mk, tab_ask = st.tabs(["Verdict", "Fundamentals", "Moat & Risk", "Markets", "Ask AI"])
+tab_v, tab_f, tab_mr, tab_mk, tab_opt, tab_ask = st.tabs(
+    ["Verdict", "Fundamentals", "Moat & Risk", "Markets", "Options", "Ask AI"])
+
+with tab_opt:
+    render_options_tab(ticker, result, data, cs)
 
 # ----------------------------------------------------------------- VERDICT
 with tab_v:
