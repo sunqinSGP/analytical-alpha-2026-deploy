@@ -119,17 +119,16 @@ def cached_sector_explain(api_key, model, sectors_json, news_titles):
 # ===========================================================================
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-
 :root{
-  --ink:#0f172a; --slate:#39455a; --muted:#4f5d73; --faint:#586377;
-  --line:#e7eaee; --bg:#f7f8fa; --surface:#ffffff;
+  --ink:#16203a; --slate:#39455a; --muted:#6b7280; --faint:#9aa3b2;
+  --line:#e6e9ef; --bg:#eef1f6; --surface:#ffffff;
+  --navy:#1F3864; --navy2:#2E5496;
   --accent:#2563eb; --accent-soft:#eff6ff; --accent-line:#bfdbfe;
-  --pos:#15803d; --neg:#b91c1c; --amber:#b45309;
+  --pos:#1E8449; --neg:#C0392B; --amber:#b45309;
 }
 * { box-sizing:border-box; }
 html, body, [class*="css"]{
-  font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+  font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Arial,sans-serif;
   font-size:17px; color:var(--ink); background:var(--bg);
   -webkit-font-smoothing:antialiased; line-height:1.55;
 }
@@ -140,10 +139,10 @@ section[data-testid="stSidebar"]{ display:none; }
 header[data-testid="stHeader"]{ background:transparent; }
 
 /* Typography */
-h1{ font-size:1.5rem !important; font-weight:700 !important; letter-spacing:-0.02em; color:var(--ink); margin:0 0 2px 0 !important; }
-h2{ font-size:1.05rem !important; font-weight:700 !important; color:var(--ink); margin:22px 0 6px 0 !important; letter-spacing:-0.01em; }
-h3{ font-size:0.92rem !important; font-weight:600 !important; color:var(--ink); margin:14px 0 6px 0 !important; }
-h4{ font-size:0.82rem !important; font-weight:600 !important; color:var(--slate); margin:12px 0 4px 0 !important; }
+h1{ font-size:1.55rem !important; font-weight:800 !important; letter-spacing:-0.02em; color:var(--navy) !important; margin:0 0 2px 0 !important; }
+h2{ font-size:1.05rem !important; font-weight:700 !important; color:var(--navy) !important; margin:22px 0 6px 0 !important; letter-spacing:-0.01em; }
+h3{ font-size:0.92rem !important; font-weight:700 !important; color:var(--navy) !important; margin:14px 0 6px 0 !important; }
+h4{ font-size:0.82rem !important; font-weight:600 !important; color:var(--navy2) !important; margin:12px 0 4px 0 !important; }
 p, li{ color:var(--slate); }
 hr{ border:none; border-top:1px solid var(--line); margin:1.1rem 0; }
 a{ color:var(--accent); text-decoration:none; font-weight:500; }
@@ -154,7 +153,8 @@ small{ color:var(--muted); }
 .sectlabel{ font-size:0.74rem; font-weight:700; text-transform:uppercase; letter-spacing:0.09em; color:var(--faint); margin:4px 0 8px 2px; }
 
 /* Cards */
-.card{ background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:18px 20px; }
+.card{ background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:18px 20px;
+  box-shadow:0 1px 3px rgba(31,56,100,0.05); }
 .card + .card{ margin-top:12px; }
 
 /* Numbers */
@@ -169,21 +169,25 @@ small{ color:var(--muted); }
 .pill.amber{ background:#fffbeb; color:var(--amber); border-color:#fde68a; }
 .dot{ width:7px; height:7px; border-radius:50%; display:inline-block; }
 
-/* Verdict hero */
-.verdict{ background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:22px 24px;
-  box-shadow:0 1px 2px rgba(15,23,42,0.04); position:relative; overflow:hidden; }
-.verdict::before{ content:''; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--accent); }
-.verdict .action{ font-size:1.7rem; font-weight:800; letter-spacing:-0.02em; line-height:1; }
-.verdict .sub{ font-size:0.9rem; color:var(--slate); font-weight:500; }
-.driver{ display:inline-flex; align-items:center; gap:5px; font-size:0.8rem; font-weight:600; color:var(--ink);
-  background:#f8fafc; border:1px solid var(--line); border-radius:8px; padding:5px 10px; margin:3px 5px 3px 0; }
-.driver .up{ color:var(--pos); } .driver .down{ color:var(--neg); }
+/* Verdict hero — navy gradient, matching the Wealth Hub net-worth hero */
+.verdict{ background:linear-gradient(135deg,#1F3864,#2E5496); border:none; border-radius:18px; padding:24px 26px;
+  box-shadow:0 10px 30px rgba(31,56,100,0.18); position:relative; overflow:hidden; color:#fff; }
+.verdict .action{ font-size:1.9rem; font-weight:800; letter-spacing:-0.02em; line-height:1; color:#fff; }
+.verdict .sub{ font-size:0.9rem; color:#cfe0f6; font-weight:500; }
+.verdict .sectlabel{ color:#9fb6d8 !important; }
+.verdict .vpill{ display:inline-flex; align-items:center; gap:6px; font-size:0.74rem; font-weight:700;
+  padding:4px 12px; border-radius:999px; background:rgba(255,255,255,0.14); border:1px solid rgba(255,255,255,0.28); }
+.verdict .vpill .dot{ width:8px; height:8px; border-radius:50%; }
+.driver{ display:inline-flex; align-items:center; gap:5px; font-size:0.8rem; font-weight:600; color:#eaf0fa;
+  background:rgba(255,255,255,0.10); border:1px solid rgba(255,255,255,0.18); border-radius:8px; padding:5px 10px; margin:3px 5px 3px 0; }
+.driver .up{ color:#5ee0a0; } .driver .down{ color:#ff9b8a; }
 
 /* st.metric → minimal */
-[data-testid="stMetric"]{ background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+[data-testid="stMetric"]{ background:var(--surface); border:1px solid var(--line); border-left:4px solid var(--navy2);
+  border-radius:12px; padding:14px 16px; box-shadow:0 1px 3px rgba(31,56,100,0.05); }
 [data-testid="stMetricLabel"] p{ font-size:0.76rem !important; font-weight:700 !important; text-transform:uppercase;
   letter-spacing:0.06em; color:var(--muted) !important; }
-[data-testid="stMetricValue"]{ font-size:1.3rem !important; font-weight:700 !important; color:var(--ink) !important;
+[data-testid="stMetricValue"]{ font-size:1.3rem !important; font-weight:800 !important; color:var(--navy) !important;
   font-variant-numeric:tabular-nums; letter-spacing:-0.01em; white-space:nowrap; overflow:visible; }
 [data-testid="stMetricLabel"]{ overflow:visible; }
 [data-testid="stMetricDelta"]{ font-size:0.78rem !important; font-weight:600 !important; }
@@ -202,21 +206,26 @@ small{ color:var(--muted); }
 input, select, textarea, .stTextInput>div>div>input{
   border-radius:9px !important; border:1px solid #cbd5e1 !important; font-size:0.9rem !important; }
 input:focus-visible{ border-color:var(--accent) !important; box-shadow:0 0 0 3px rgba(37,99,235,0.12) !important; }
-/* base / secondary buttons: explicit white bg + dark text so they never inherit a dark
-   theme default (the global p-colour and Streamlit's base theme were bleeding in) */
+/* Buttons. Legacy (older-DOM) rules first; the modern data-testid rules come LAST so they
+   win on equal specificity. Secondary = white + ink; primary (incl. form-submit) = navy + white. */
 .stButton>button, .stDownloadButton>button, [data-testid="stFormSubmitButton"]>button{
   border-radius:9px !important; font-weight:600 !important; font-size:0.86rem !important;
   border:1px solid var(--line) !important; background:var(--surface) !important; color:var(--ink) !important; }
-.stButton>button *, .stDownloadButton>button *, [data-testid="stFormSubmitButton"]>button *{ color:var(--ink) !important; }
-.stButton>button:hover, .stDownloadButton>button:hover, [data-testid="stFormSubmitButton"]>button:hover{
+.stButton>button[kind="primary"], [data-testid="stFormSubmitButton"]>button[kind="primaryFormSubmit"]{
+  background:var(--navy) !important; border-color:var(--navy) !important; color:#fff !important; }
+button[data-testid^="stBaseButton-"]{ border-radius:9px !important; font-weight:600 !important;
+  font-size:0.86rem !important; border:1px solid var(--line) !important; }
+button[data-testid="stBaseButton-secondary"], button[data-testid="stBaseButton-secondaryFormSubmit"]{
+  background:var(--surface) !important; color:var(--ink) !important; }
+button[data-testid="stBaseButton-secondary"] *, button[data-testid="stBaseButton-secondaryFormSubmit"] *{ color:var(--ink) !important; }
+button[data-testid="stBaseButton-secondary"]:hover, button[data-testid="stBaseButton-secondaryFormSubmit"]:hover{
   background:var(--accent-soft) !important; border-color:var(--accent-line) !important; }
-.stButton>button:hover, .stButton>button:hover *,
-.stDownloadButton>button:hover, .stDownloadButton>button:hover *{ color:var(--accent) !important; }
-/* primary button: dark bg + white text — declared last so it wins over the base rules */
-.stButton>button[kind="primary"]{ background:var(--ink) !important; border-color:var(--ink) !important; font-weight:700 !important; }
-.stButton>button[kind="primary"], .stButton>button[kind="primary"] *{ color:#ffffff !important; }
-.stButton>button[kind="primary"]:hover{ background:#1e293b !important; border-color:#1e293b !important; }
-.stButton>button[kind="primary"]:hover, .stButton>button[kind="primary"]:hover *{ color:#ffffff !important; }
+button[data-testid="stBaseButton-secondary"]:hover *, button[data-testid="stBaseButton-secondaryFormSubmit"]:hover *{ color:var(--accent) !important; }
+button[data-testid="stBaseButton-primary"], button[data-testid="stBaseButton-primaryFormSubmit"]{
+  background:var(--navy) !important; border-color:var(--navy) !important; color:#ffffff !important; font-weight:700 !important; }
+button[data-testid="stBaseButton-primary"] *, button[data-testid="stBaseButton-primaryFormSubmit"] *{ color:#ffffff !important; }
+button[data-testid="stBaseButton-primary"]:hover, button[data-testid="stBaseButton-primaryFormSubmit"]:hover{
+  background:var(--navy2) !important; border-color:var(--navy2) !important; }
 
 /* Dataframe */
 [data-testid="stDataFrame"]{ border:1px solid var(--line); border-radius:12px; }
@@ -404,11 +413,13 @@ def render_verdict_hero(result, current_weight=0):
     top_risk = f"{risks[0]['factor']} — {risks[0]['detail']}" if risks else 'No critical flags'
     stop = result['risk_management']['mental_stop_loss']['thesis_break_threshold']
 
+    cbright = {'HIGH CONVICTION': '#5ee0a0', 'MODERATE CONVICTION': '#7eb6ff', 'SELECTIVE': '#ffc078',
+               'OPPORTUNISTIC': '#ffd66b', 'PASS': '#ff9b8a'}.get(conviction, '#cfe0f6')
     st.markdown(f"""
     <div class="verdict">
       <div style="display:flex; align-items:baseline; gap:16px; flex-wrap:wrap;">
-        <span class="action" style="color:{acolor};">{action}</span>
-        <span class="pill" style="border-color:{ccolor}33; color:{ccolor}; background:{ccolor}0f;">{conviction.title()}</span>
+        <span class="action">{action}</span>
+        <span class="vpill"><span class="dot" style="background:{cbright};"></span>{conviction.title()}</span>
         <span class="sub">{asub}</span>
       </div>
       <div style="display:flex; gap:32px; flex-wrap:wrap; margin-top:16px;">
@@ -418,9 +429,9 @@ def render_verdict_hero(result, current_weight=0):
         </div>
         <div style="flex:1; min-width:250px;">
           <div class="sectlabel" style="margin-left:0;">Biggest risk</div>
-          <div style="font-size:0.84rem; color:var(--ink); font-weight:500;">{top_risk}</div>
+          <div style="font-size:0.84rem; color:#eaf0fa; font-weight:500;">{top_risk}</div>
           <div class="sectlabel" style="margin:10px 0 4px 0;">Thesis breaks if</div>
-          <div style="font-size:0.82rem; color:var(--slate);">{stop}</div>
+          <div style="font-size:0.82rem; color:#cfe0f6;">{stop}</div>
         </div>
       </div>
     </div>
@@ -1016,7 +1027,7 @@ def render_portfolio(positions, base_ccy):
 # ===========================================================================
 st.markdown("""
 <div style="display:flex; align-items:baseline; gap:12px; margin-bottom:2px;">
-  <span style="font-size:1.35rem; font-weight:800; letter-spacing:-0.02em; color:var(--ink);">Analytical Alpha</span>
+  <span style="font-size:1.4rem; font-weight:800; letter-spacing:-0.02em; color:var(--navy);">◆ Analytical Alpha</span>
   <span class="pill accent" style="font-weight:700;">2026</span>
   <span style="margin-left:auto; font-size:0.78rem; color:var(--faint);">Strategic Growth Investment Framework</span>
 </div>
