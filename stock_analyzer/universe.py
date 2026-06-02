@@ -67,29 +67,38 @@ WATCHLIST = list(dict.fromkeys(
 # Edit/expand freely; correctness is enforced by the gate, not by this list.
 # ---------------------------------------------------------------------------
 US_SMALL_TECH = [
-    'PRGS', 'SMTC', 'AMBA', 'FORM', 'RMBS', 'POWI', 'SLAB', 'SITM', 'CEVA',
-    'YELP', 'CARS', 'BIGC', 'DOMO', 'PD', 'BAND',
+    'PRGS', 'CEVA', 'YELP', 'CARS', 'DOMO', 'PD', 'BAND',
+    'EXTR', 'CALX', 'DGII', 'AGYS', 'MITK', 'VIAV', 'AVPT', 'RPD', 'SPT', 'ALRM',
 ]
 US_SMALL_HEALTH = [
-    'CORT', 'SUPN', 'COLL', 'PCRX', 'HRMY', 'LNTH', 'ADUS', 'AMED', 'HSTM',
+    'CORT', 'SUPN', 'COLL', 'PCRX', 'HRMY', 'ADUS', 'HSTM',
+    'AMPH', 'ANIP', 'PRVA', 'CCRN', 'OFIX', 'ATEC', 'VCEL', 'SIGA', 'PINC', 'AMRX',
 ]
 US_SMALL_INDUSTRIAL = [
-    'KAI', 'AIN', 'PRIM', 'MYRG', 'ROAD', 'CSWI', 'FELE', 'B', 'HELE',
+    'KAI', 'AIN', 'CSWI', 'FELE', 'B', 'HELE',
+    'MWA', 'ALG', 'KMT', 'CXT', 'THR', 'SXI', 'HLIO', 'NPO', 'GVA',
 ]
 US_SMALL_CONSUMER = [
     'BOOT', 'SHOO', 'CAL', 'WGO', 'PLAY', 'CAKE', 'BJRI', 'DIN', 'CBRL',
+    'OXM', 'LZB', 'HVT', 'SCVL', 'ZUMZ', 'GES', 'JJSF', 'DENN', 'CENT', 'PLCE',
 ]
 US_SMALL_FIN = [
-    'PB', 'FFIN', 'SFBS', 'BANF', 'WSFS', 'CADE',
+    'PB', 'FFIN', 'SFBS', 'BANF', 'WSFS',
+]
+US_SMALL_BANKS = [
+    'TCBI', 'CATY', 'HOPE', 'FIBK', 'INDB', 'TOWN', 'PFBC', 'AUB',
+    'FFBC', 'CVBF', 'WAFD', 'NBHC', 'FBNC', 'TRMK', 'WSBC',
 ]
 US_SMALL_ENERGY = [
-    'MGY', 'SM', 'CRC', 'CIVI', 'VTLE',
+    'MGY', 'SM', 'CRC',
+    'GPOR', 'TALO', 'BRY', 'CRK', 'KOS', 'AROC', 'NOG', 'CRGY',
 ]
 US_SMALL_MATERIALS = [
     'CC', 'HUN', 'CMP', 'KRO',
+    'IOSP', 'TROX', 'KOP', 'HWKN', 'SCL', 'ASIX',
 ]
 
 SMALLCAP_UNIVERSE = list(dict.fromkeys(
     US_SMALL_TECH + US_SMALL_HEALTH + US_SMALL_INDUSTRIAL + US_SMALL_CONSUMER
-    + US_SMALL_FIN + US_SMALL_ENERGY + US_SMALL_MATERIALS
+    + US_SMALL_FIN + US_SMALL_BANKS + US_SMALL_ENERGY + US_SMALL_MATERIALS
 ))

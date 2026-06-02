@@ -23,6 +23,7 @@ from stock_analyzer import strategy as strat
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'screen_results.json')
 IVH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'iv_history.json')
 POS = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'options_positions.json')
+SC_BLOCK = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'smallcap_block.json')
 # US-listed names (plain symbols, no exchange suffix) are the reliably option-able set.
 US_OPTIONABLE = [tk for tk in WATCHLIST if '.' not in tk]
 
@@ -216,6 +217,63 @@ def screen_smallcap(tickers, workers=5):
     return survivors, dropped, failed
 
 
+def _build_smallcap_block(survivors, dropped, failed):
+    """Assemble the saved 'smallcap' payload block from a small-cap scan's results."""
+    ranked = strat.rank_smallcap([r for r in survivors if r.get('factors')])
+    rows = [{
+        'ticker': r['ticker'], 'name': r.get('name'), 'sector': r.get('sector'),
+        'mcap': r.get('mcap'), 'price': round(r['price'], 2) if r.get('price') else None,
+        'composite': round(r['composite'], 2) if r.get('composite') is not None else None,
+        'z': {k: (round(v, 2) if v is not None else None) for k, v in (r.get('z') or {}).items()},
+        'trend': (r.get('trend') or {}).get('signal'),
+    } for r in ranked]
+    return {
+        'rank': rows, 'n_universe': len(SMALLCAP_UNIVERSE),
+        'n_passed': len(survivors), 'n_dropped': len(dropped), 'n_failed': len(failed),
+        'dropped': [{'ticker': r['ticker'], 'reasons': r['reasons'], 'mcap': r.get('mcap')}
+                    for r in dropped][:60],
+        'weights': strat.SMALLCAP_WEIGHTS, 'params': strat.SMALLCAP_PARAMS,
+    }
+
+
+def _smallcap_only():
+    """Run ONLY the small-cap pass and write its block to SC_BLOCK. Invoked as a *fresh subprocess*
+    (see _run_smallcap_subprocess): Yahoo's quoteSummary/.info endpoint — which the quality gate needs —
+    gets crumb-poisoned after the main run's ~300+ fundamental fetches, and new threads/sessions don't
+    reset it within a process. A clean process gets a clean crumb, so the gate actually sees the data."""
+    surv, drop, failed = screen_smallcap(SMALLCAP_UNIVERSE)
+    block = _build_smallcap_block(surv, drop, failed)
+    os.makedirs(os.path.dirname(SC_BLOCK), exist_ok=True)
+    with open(SC_BLOCK, 'w', encoding='utf-8') as f:
+        json.dump(block, f, indent=2, default=str)
+    print(f"SMALLCAP_DONE passed={len(surv)} dropped={len(drop)} failed={len(failed)} "
+          f"of {len(SMALLCAP_UNIVERSE)}", flush=True)
+    return block
+
+
+def _empty_smallcap_block():
+    return {'rank': [], 'n_universe': len(SMALLCAP_UNIVERSE), 'n_passed': 0, 'n_dropped': 0,
+            'n_failed': len(SMALLCAP_UNIVERSE), 'dropped': [],
+            'weights': strat.SMALLCAP_WEIGHTS, 'params': strat.SMALLCAP_PARAMS}
+
+
+def _run_smallcap_subprocess():
+    """Spawn a fresh Python process for the small-cap pass (clean Yahoo crumb) and read back its block.
+    Falls back to an empty block if the child errors/times out — never aborts the nightly."""
+    import subprocess
+    try:
+        proc = subprocess.run([sys.executable, os.path.abspath(__file__), '--smallcap-only'],
+                              capture_output=True, text=True, timeout=600)
+        for line in (proc.stdout or '').splitlines():
+            if line.startswith('SMALLCAP_DONE'):
+                print('  small-cap (fresh subprocess): ' + line.replace('SMALLCAP_DONE ', ''), flush=True)
+        with open(SC_BLOCK, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"  small-cap subprocess failed ({e.__class__.__name__}); writing empty block", flush=True)
+        return _empty_smallcap_block()
+
+
 def main():
     t0 = time.time()
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] screening {len(WATCHLIST)} tickers…", flush=True)
@@ -277,18 +335,9 @@ def main():
           f"regime {regime.get('pct_up')}% above 200d", flush=True)
 
     # Small-cap quality-value sleeve: gate out junk/micro-caps, then rank survivors (value+quality tilt).
-    print(f"  scanning {len(SMALLCAP_UNIVERSE)} small-cap candidates (quality-value sleeve)…", flush=True)
-    sc_survivors, sc_dropped, sc_failed = screen_smallcap(SMALLCAP_UNIVERSE)
-    sc_ranked = strat.rank_smallcap([r for r in sc_survivors if r.get('factors')])
-    smallcap_rows = [{
-        'ticker': r['ticker'], 'name': r.get('name'), 'sector': r.get('sector'),
-        'mcap': r.get('mcap'), 'price': round(r['price'], 2) if r.get('price') else None,
-        'composite': round(r['composite'], 2) if r.get('composite') is not None else None,
-        'z': {k: (round(v, 2) if v is not None else None) for k, v in (r.get('z') or {}).items()},
-        'trend': (r.get('trend') or {}).get('signal'),
-    } for r in sc_ranked]
-    print(f"  small-cap: {len(sc_survivors)} cleared the gate, {len(sc_dropped)} dropped, "
-          f"{len(sc_failed)} fetch-failed (of {len(SMALLCAP_UNIVERSE)})", flush=True)
+    # Run in a FRESH subprocess so the .info/quoteSummary endpoint (rate-limited late in this run) is clean.
+    print(f"  scanning {len(SMALLCAP_UNIVERSE)} small-cap candidates (quality-value sleeve, fresh process)…", flush=True)
+    smallcap_block = _run_smallcap_subprocess()
 
     payload = {
         'generated_at': datetime.now().isoformat(timespec='seconds'),
@@ -300,13 +349,7 @@ def main():
         'position_alerts': pos_rows,
         'strategy': {'factor_rank': factor_rows[:50], 'regime': regime, 'trends': trends,
                      'weights': strat.DEFAULT_FACTOR_WEIGHTS},
-        'smallcap': {
-            'rank': smallcap_rows, 'n_universe': len(SMALLCAP_UNIVERSE),
-            'n_passed': len(sc_survivors), 'n_dropped': len(sc_dropped), 'n_failed': len(sc_failed),
-            'dropped': [{'ticker': r['ticker'], 'reasons': r['reasons'], 'mcap': r.get('mcap')}
-                        for r in sc_dropped][:60],
-            'weights': strat.SMALLCAP_WEIGHTS, 'params': strat.SMALLCAP_PARAMS,
-        },
+        'smallcap': smallcap_block,
     }
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, 'w', encoding='utf-8') as f:
@@ -318,4 +361,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if '--smallcap-only' in sys.argv:
+        _smallcap_only()
+    else:
+        main()
