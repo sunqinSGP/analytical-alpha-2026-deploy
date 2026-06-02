@@ -57,3 +57,39 @@ WATCHLIST = list(dict.fromkeys(
     US_SOFTWARE + US_SEMI + US_MEGA + US_ENERGY_INDUSTRIAL + US_HEALTHCARE
     + US_FINANCIAL + US_CONSUMER + SGX + HKEX + EU_ADR
 ))
+
+# ---------------------------------------------------------------------------
+# SMALL-CAP sleeve universe (separate from WATCHLIST, which is large/mid-cap).
+# This is a STARTER list of liquid US small/mid-caps across sectors — the runtime
+# gate in strategy.smallcap_gate() enforces the real filters ($300M-$3B market cap,
+# price > $5, liquid, profitable / not over-levered), so names that have drifted
+# above/below small-cap or turned unprofitable are dropped automatically at scan time.
+# Edit/expand freely; correctness is enforced by the gate, not by this list.
+# ---------------------------------------------------------------------------
+US_SMALL_TECH = [
+    'PRGS', 'SMTC', 'AMBA', 'FORM', 'RMBS', 'POWI', 'SLAB', 'SITM', 'CEVA',
+    'YELP', 'CARS', 'BIGC', 'DOMO', 'PD', 'BAND',
+]
+US_SMALL_HEALTH = [
+    'CORT', 'SUPN', 'COLL', 'PCRX', 'HRMY', 'LNTH', 'ADUS', 'AMED', 'HSTM',
+]
+US_SMALL_INDUSTRIAL = [
+    'KAI', 'AIN', 'PRIM', 'MYRG', 'ROAD', 'CSWI', 'FELE', 'B', 'HELE',
+]
+US_SMALL_CONSUMER = [
+    'BOOT', 'SHOO', 'CAL', 'WGO', 'PLAY', 'CAKE', 'BJRI', 'DIN', 'CBRL',
+]
+US_SMALL_FIN = [
+    'PB', 'FFIN', 'SFBS', 'BANF', 'WSFS', 'CADE',
+]
+US_SMALL_ENERGY = [
+    'MGY', 'SM', 'CRC', 'CIVI', 'VTLE',
+]
+US_SMALL_MATERIALS = [
+    'CC', 'HUN', 'CMP', 'KRO',
+]
+
+SMALLCAP_UNIVERSE = list(dict.fromkeys(
+    US_SMALL_TECH + US_SMALL_HEALTH + US_SMALL_INDUSTRIAL + US_SMALL_CONSUMER
+    + US_SMALL_FIN + US_SMALL_ENERGY + US_SMALL_MATERIALS
+))

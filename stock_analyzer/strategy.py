@@ -156,3 +156,68 @@ def regime_gauge(signals):
         return {'pct_up': None, 'n': 0, 'risk_on': None}
     pct = 100.0 * sum(flags) / len(flags)
     return {'pct_up': pct, 'n': len(flags), 'risk_on': pct >= 50.0}
+
+
+# ---------------------------------------------------------------------------
+# Small-cap QUALITY-VALUE sleeve  (Asness, Frazzini, Israel, Moskowitz, Pedersen,
+# 'Size Matters, If You Control Your Junk', JFE 2018). The raw size premium is weak,
+# micro-cap-concentrated, and ~dead net of the 2-4%/yr costs on the smallest names.
+# It only RESURRECTS once you control for quality (screen out the 'junk'): a robust,
+# global, NOT-micro-cap premium driven by high-quality, low-vol, profitable small stocks.
+# So the GATE below (investability + quality) is the load-bearing piece, NOT optional polish.
+# Survivors are then tilted toward VALUE + QUALITY (the factors the evidence emphasises).
+# Informational, not advice.
+# ---------------------------------------------------------------------------
+SMALLCAP_PARAMS = {
+    'min_mcap': 300e6,          # exclude micro-caps: premium is NOT there + costs are prohibitive
+    'max_mcap': 3.0e9,          # small-cap ceiling (above this it's mid/large-cap quality-value)
+    'min_price': 5.0,           # no sub-$5 names (penny-stock spreads/dilution = junk territory)
+    'min_avg_volume': 100_000,  # liquidity floor (shares/day) so it's actually tradable net of costs
+    'max_debt_equity': 200.0,   # debtToEquity is a percent (~200 => 2.0x) — exclude over-levered
+    'require_profitable': True, # positive margin OR free cash flow — the core 'control your junk' screen
+}
+
+# Survivors ranked with a value+quality TILT (vs equal-weight), per the JFE evidence.
+SMALLCAP_WEIGHTS = {'value': 1.5, 'quality': 1.5, 'momentum': 1.0, 'lowvol': 1.0}
+
+
+def smallcap_gate(info, closes=None, params=None):
+    """Investability + quality gate for the small-cap sleeve — the 'control your junk' filter.
+
+    Returns {'pass': bool, 'reasons': [...failed checks...], 'mcap': float|None, 'price': float|None}.
+    A name must clear EVERY check to qualify; `reasons` lists the ones it failed (for UI/debugging)."""
+    p = {**SMALLCAP_PARAMS, **(params or {})}
+    info = info or {}
+    reasons = []
+    mcap = _f(info.get('marketCap'))
+    price = (_f(info.get('currentPrice')) or _f(info.get('regularMarketPrice'))
+             or (closes[-1] if closes else None))
+    de = _f(info.get('debtToEquity'))
+    pm = _f(info.get('profitMargins'))
+    fcf = _f(info.get('freeCashflow'))
+    vol = _f(info.get('averageVolume')) or _f(info.get('averageDailyVolume10Day'))
+
+    if mcap is None:
+        reasons.append('no market cap')
+    else:
+        if mcap < p['min_mcap']:
+            reasons.append('micro-cap (below floor)')
+        if mcap > p['max_mcap']:
+            reasons.append('too large (above small-cap ceiling)')
+    if price is not None and price < p['min_price']:
+        reasons.append('price below $%g floor' % p['min_price'])
+    if vol is not None and vol < p['min_avg_volume']:
+        reasons.append('illiquid (thin volume)')
+    if de is not None and de > p['max_debt_equity']:
+        reasons.append('over-levered')
+    if p['require_profitable']:
+        profitable = (pm is not None and pm > 0) or (fcf is not None and fcf > 0)
+        if not profitable:
+            reasons.append('unprofitable (junk screen)')
+
+    return {'pass': len(reasons) == 0, 'reasons': reasons, 'mcap': mcap, 'price': price}
+
+
+def rank_smallcap(stocks, weights=None):
+    """Convenience: rank gate-survivors with the value+quality SMALLCAP tilt (see rank_universe)."""
+    return rank_universe(stocks, weights=weights or SMALLCAP_WEIGHTS)

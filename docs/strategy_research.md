@@ -58,12 +58,50 @@ US dividend withholding applies). Synthesised from a verified deep-research pass
 - **Strategy mix**: the illustrative complementary design (factor/quality core + trend sleeve +
   option-selling income sleeve) with the caveats above — guidance, not an allocation directive.
 
+---
+
+## The small-cap quality-value sleeve
+*Added from a focused follow-up check (lighter than the full deep-research pass, but the sources agree and
+are authoritative). The pivotal question: is there a real small-cap-specific edge that beats just doing
+quality-value in large-caps, net of the higher small-cap costs?*
+
+**Verdict: yes — but only in the quality-controlled form.**
+- **Raw small-cap is essentially dead net of costs.** The plain size premium is weak, time-varying,
+  concentrated in micro-caps, and weak internationally; transaction costs of **~2–4%/yr on the smallest
+  stocks** eat most or all of it (Lesmond et al.; the broader "is the size effect dead?" literature).
+- **Controlling for quality resurrects it.** Asness, Frazzini, Israel, Moskowitz & Pedersen,
+  **"Size Matters, If You Control Your Junk"** (*JFE* 2018): once you control for quality (the QMJ "junk"
+  factor), a **strong, stable, robust size premium emerges** — **not** concentrated in micro-caps, robust
+  across **30 industries and 24 countries**, with a high Sharpe. The driver is **high-quality, low-volatility,
+  profitable small stocks — not small junk.**
+- **Small-cap value** is stronger than large-cap value in academic long-short form, but **murkier long-only**
+  (long-only large value ≈ small value), so it's a tilt, not a slam-dunk (Fama-French).
+
+**So the quality / investability gate is the load-bearing piece, not optional polish.** Drop it (or drift
+into micro-caps/junk) and costs erase the edge. The edge *over* a large-cap quality-value tilt is real but
+**modest** and entirely execution-dependent (quality screen + micro-cap exclusion + cost discipline).
+
+### How the module implements this
+- **`strategy.smallcap_gate`** — a hard pre-filter ("control your junk"): market cap **$300M–$3B** (excludes
+  micro-caps, where the premium isn't and costs are prohibitive, *and* mid/large names), **price > $5**,
+  **liquid** (≥100k shares/day), **profitable** (positive margin or free cash flow), and **not over-levered**
+  (debt/equity ≤ 2x). Names that fail are dropped *with reasons* (shown in the UI for transparency).
+- **`strategy.rank_smallcap`** — survivors ranked by the same factor engine but with a **value + quality tilt**
+  (weights 1.5 / 1.5 vs 1.0 / 1.0 for momentum / low-vol), the factors the evidence emphasises.
+- **Universe** — a starter list of liquid US small/mid-caps (`universe.SMALLCAP_UNIVERSE`); correctness is
+  enforced by the runtime gate, so cap-drift / newly-unprofitable names self-eject. Scanned nightly into the
+  `smallcap` block of `screen_results.json`; surfaced in the **Strategy** tab (gate summary + ranked survivors
+  + a "what got screened out and why" panel). A tilt, not a buy list.
+
 ## Sources
 Primary: McLean & Pontiff (*Journal of Finance* 2016); Asness-Moskowitz-Pedersen "Value and Momentum
 Everywhere" (*JF* 2013); Asness et al. "Fact, Fiction, and Value Investing" (*JPM* 2015); Asness "The Siren
 Song of Factor Timing" (*JPM* 2016); Daniel & Moskowitz "Momentum Crashes" (*JFE* 2016); Moskowitz-Ooi-Pedersen
 "Time Series Momentum" (*JFE* 2012); Hurst-Ooi-Pedersen "A Century of Evidence" (*JPM* 2017) and
 "Demystifying Managed Futures" (*JOIM* 2013); Faber "A Quantitative Approach to Tactical Asset Allocation."
+Small-cap sleeve: Asness, Frazzini, Israel, Moskowitz & Pedersen "Size Matters, If You Control Your Junk"
+(*JFE* 2018, 129(3):479-509); Fama & French on the value/size premia; Lesmond et al. and the "is the size
+effect dead?" cost literature (transaction costs ~2–4%/yr on the smallest names).
 Refuted/!weak (not used): static-WML Sharpe 0.71; vol-scaled momentum "doubling" Sharpe; value "no signs of
 weakening"; "every contract positive" in TSM.
 

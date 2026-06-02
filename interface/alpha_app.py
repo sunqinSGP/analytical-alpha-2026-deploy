@@ -1214,6 +1214,65 @@ def _render_strategy_mix():
                "real-fund Sharpe (~0.3–0.9) is well below its ~1.8 gross backtest; and don't try to time factors.")
 
 
+def _render_smallcap(scb):
+    sectlabel("Small-cap quality-value sleeve")
+    st.markdown(
+        '<div class="card" style="border-left:4px solid var(--accent);">'
+        '<div style="font-size:0.92rem; color:var(--slate); line-height:1.6;">'
+        'The evidence (Asness, Frazzini, Israel, Moskowitz &amp; Pedersen, <i>"Size Matters, If You Control Your '
+        'Junk"</i>, JFE 2018): the <b>raw</b> small-cap premium is weak, micro-cap-concentrated, and roughly '
+        '<b>dead net of the 2–4%/yr trading costs</b> on the smallest names. It only <b>resurrects once you control '
+        'for quality</b> — a robust, global premium driven by <b>high-quality, profitable, low-vol</b> small stocks, '
+        '<i>not</i> small junk. So this sleeve <b>gates first, ranks second</b>: the quality / investability filter '
+        'is the load-bearing piece, not optional polish.</div></div>', unsafe_allow_html=True)
+    if not scb or not scb.get('rank'):
+        st.caption("The small-cap sleeve populates from the nightly scan (gate, then value/quality rank). "
+                   "Informational, not advice.")
+        return
+    npass, ndrop = scb.get('n_passed', 0), scb.get('n_dropped', 0)
+    nuni = scb.get('n_universe', npass + ndrop)
+    p = scb.get('params') or {}
+    st.markdown(
+        f'<div style="font-size:0.86rem; color:var(--slate); margin:4px 0 2px;">'
+        f'<b>{npass}</b> of <b>{nuni}</b> candidates cleared the quality + investability gate '
+        f'(<b>{ndrop}</b> screened out as junk / micro-cap / illiquid).</div>'
+        f'<div style="font-size:0.78rem; color:var(--muted);">Gate: market cap '
+        f'{_fmt_money(p.get("min_mcap", 3e8))}–{_fmt_money(p.get("max_mcap", 3e9))} · price &gt; '
+        f'${p.get("min_price", 5):g} · liquid · profitable (margin or FCF) · not over-levered.</div>',
+        unsafe_allow_html=True)
+    st.caption("Survivors ranked by a value + quality–tilted composite (the factors the evidence emphasises), "
+               "z-scored across the sleeve. A tilt, not a guarantee — factor edges decay out-of-sample, and the "
+               "net-of-cost edge over large-cap quality-value is real but modest. Informational, not advice.")
+    rows_html = []
+    for i, r in enumerate(scb['rank'][:25], 1):
+        z = r.get('z') or {}
+        comp = r.get('composite')
+        comp_s = f'{comp:+.2f}' if comp is not None else '—'
+        tr = r.get('trend')
+        tr_pill = pill('▲ up', 'pos') if tr == 'up' else (pill('▼ down', 'neg') if tr == 'down' else '—')
+        rows_html.append(
+            f'<tr><td>{i}</td><td><b>{r.get("ticker")}</b></td>'
+            f'<td style="color:var(--slate);">{_fmt_money(r.get("mcap"))}</td>'
+            f'<td style="font-weight:800; color:var(--navy);">{comp_s}</td>'
+            + _zc(z.get('value')) + _zc(z.get('quality')) + _zc(z.get('momentum')) + _zc(z.get('lowvol'))
+            + f'<td>{tr_pill}</td>'
+            f'<td style="color:var(--muted); font-size:0.8rem;">{(r.get("sector") or "")[:16]}</td></tr>')
+    head = ('<tr><th>#</th><th>Ticker</th><th>Mkt cap</th><th>Composite</th><th>Value</th><th>Quality</th>'
+            '<th>Mom</th><th>Low-vol</th><th>Trend</th><th>Sector</th></tr>')
+    st.markdown(f'<table class="clean">{head}{"".join(rows_html)}</table>', unsafe_allow_html=True)
+    dropped = scb.get('dropped') or []
+    if dropped:
+        with st.expander(f"What got screened out ({len(dropped)} shown) — and why"):
+            drows = []
+            for d in dropped:
+                reasons = ', '.join(d.get('reasons') or []) or '—'
+                drows.append(f'<tr><td><b>{d.get("ticker")}</b></td>'
+                             f'<td style="color:var(--slate);">{_fmt_money(d.get("mcap"))}</td>'
+                             f'<td style="color:var(--muted); font-size:0.82rem;">{reasons}</td></tr>')
+            st.markdown('<table class="clean"><tr><th>Ticker</th><th>Mkt cap</th><th>Why dropped</th></tr>'
+                        + ''.join(drows) + '</table>', unsafe_allow_html=True)
+
+
 def render_strategy():
     saved = _load_saved_screen()
     sb = (saved or {}).get('strategy')
@@ -1224,6 +1283,8 @@ def render_strategy():
     _render_strategy_mix()
     st.markdown("---")
     _render_factor_rank(sb)
+    st.markdown("---")
+    _render_smallcap((saved or {}).get('smallcap'))
 
 
 def render_screener():

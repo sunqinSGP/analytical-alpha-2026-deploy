@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from stock_analyzer.alpha_engine import alpha_analysis, assign_screen_tier, _yf_ticker
-from stock_analyzer.universe import WATCHLIST
+from stock_analyzer.universe import WATCHLIST, SMALLCAP_UNIVERSE
 from stock_analyzer import sectors as sct
 from stock_analyzer import options as opt
 from stock_analyzer import positions as posn
@@ -168,6 +168,54 @@ def screen_positions(positions, workers=3):
     return rows
 
 
+def screen_smallcap_one(tk):
+    """Fetch one small-cap candidate, apply the quality/investability gate, and (if it clears)
+    compute factor signals + trend. Returns a row tagged pass/drop, or None on a fetch error."""
+    try:
+        t = _yf_ticker(tk)
+        info = t.info or {}
+        hist = t.history(period='2y')
+        closes = ([float(x) for x in hist['Close'].dropna().tolist()]
+                  if hist is not None and not hist.empty and 'Close' in hist.columns else [])
+        gate = strat.smallcap_gate(info, closes)
+        row = {
+            'ticker': tk, 'name': info.get('shortName') or info.get('longName') or tk,
+            'sector': info.get('sector'), 'mcap': gate['mcap'], 'price': gate['price'],
+            'pass': gate['pass'], 'reasons': gate['reasons'],
+        }
+        if gate['pass']:
+            row['factors'] = strat.stock_factor_raw(info, closes)
+            row['trend'] = strat.trend_signal(closes)
+        return row
+    except Exception:
+        return None
+
+
+def screen_smallcap(tickers, workers=5):
+    """Scan the small-cap universe (with one gentle retry for fetch failures).
+    Returns (survivor_rows, dropped_rows, failed_tickers)."""
+    survivors, dropped, failed = [], [], []
+
+    def _run(tks, w):
+        with ThreadPoolExecutor(max_workers=w) as ex:
+            futs = {ex.submit(screen_smallcap_one, tk): tk for tk in tks}
+            for fut in as_completed(futs):
+                r = fut.result()
+                if not r:
+                    failed.append(futs[fut])
+                elif r.get('pass'):
+                    survivors.append(r)
+                else:
+                    dropped.append(r)
+
+    _run(tickers, workers)
+    if failed:
+        retry, failed = failed[:], []
+        time.sleep(3)
+        _run(retry, max(2, workers - 2))
+    return survivors, dropped, failed
+
+
 def main():
     t0 = time.time()
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] screening {len(WATCHLIST)} tickers…", flush=True)
@@ -228,6 +276,20 @@ def main():
     print(f"  strategy: ranked {len(factor_rows)} names; "
           f"regime {regime.get('pct_up')}% above 200d", flush=True)
 
+    # Small-cap quality-value sleeve: gate out junk/micro-caps, then rank survivors (value+quality tilt).
+    print(f"  scanning {len(SMALLCAP_UNIVERSE)} small-cap candidates (quality-value sleeve)…", flush=True)
+    sc_survivors, sc_dropped, sc_failed = screen_smallcap(SMALLCAP_UNIVERSE)
+    sc_ranked = strat.rank_smallcap([r for r in sc_survivors if r.get('factors')])
+    smallcap_rows = [{
+        'ticker': r['ticker'], 'name': r.get('name'), 'sector': r.get('sector'),
+        'mcap': r.get('mcap'), 'price': round(r['price'], 2) if r.get('price') else None,
+        'composite': round(r['composite'], 2) if r.get('composite') is not None else None,
+        'z': {k: (round(v, 2) if v is not None else None) for k, v in (r.get('z') or {}).items()},
+        'trend': (r.get('trend') or {}).get('signal'),
+    } for r in sc_ranked]
+    print(f"  small-cap: {len(sc_survivors)} cleared the gate, {len(sc_dropped)} dropped, "
+          f"{len(sc_failed)} fetch-failed (of {len(SMALLCAP_UNIVERSE)})", flush=True)
+
     payload = {
         'generated_at': datetime.now().isoformat(timespec='seconds'),
         'generated_human': datetime.now().strftime('%d %b %Y, %H:%M'),
@@ -238,6 +300,13 @@ def main():
         'position_alerts': pos_rows,
         'strategy': {'factor_rank': factor_rows[:50], 'regime': regime, 'trends': trends,
                      'weights': strat.DEFAULT_FACTOR_WEIGHTS},
+        'smallcap': {
+            'rank': smallcap_rows, 'n_universe': len(SMALLCAP_UNIVERSE),
+            'n_passed': len(sc_survivors), 'n_dropped': len(sc_dropped), 'n_failed': len(sc_failed),
+            'dropped': [{'ticker': r['ticker'], 'reasons': r['reasons'], 'mcap': r.get('mcap')}
+                        for r in sc_dropped][:60],
+            'weights': strat.SMALLCAP_WEIGHTS, 'params': strat.SMALLCAP_PARAMS,
+        },
     }
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, 'w', encoding='utf-8') as f:

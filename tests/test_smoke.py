@@ -475,5 +475,32 @@ _jpm = thematic_classification('JPM', {'longBusinessSummary': 'A bank serving re
 check("thematic: a 2-keyword coincidence stays below the fit threshold",
       _jpm['all_scores']['smallcap_recovery'] == 2 and _jpm['primary_theme'] is None)
 
+print("\n[18] Small-cap quality-value gate + tilt")
+_good = {'marketCap': 1.2e9, 'currentPrice': 22.0, 'averageVolume': 800_000,
+         'debtToEquity': 60.0, 'profitMargins': 0.12, 'freeCashflow': 8e7}
+check("smallcap_gate passes a liquid, profitable small-cap", strat.smallcap_gate(_good)['pass'] is True)
+_micro = strat.smallcap_gate({**_good, 'marketCap': 1.0e8})
+check("smallcap_gate rejects a micro-cap (below floor)",
+      _micro['pass'] is False and any('micro' in r for r in _micro['reasons']))
+check("smallcap_gate rejects a too-large (mid/large) cap",
+      strat.smallcap_gate({**_good, 'marketCap': 1.0e10})['pass'] is False)
+check("smallcap_gate rejects a sub-$5 penny stock",
+      strat.smallcap_gate({**_good, 'currentPrice': 3.0})['pass'] is False)
+check("smallcap_gate rejects an illiquid (thin-volume) name",
+      strat.smallcap_gate({**_good, 'averageVolume': 1_000})['pass'] is False)
+check("smallcap_gate rejects an over-levered name",
+      strat.smallcap_gate({**_good, 'debtToEquity': 400.0})['pass'] is False)
+_junk = strat.smallcap_gate({**_good, 'profitMargins': -0.2, 'freeCashflow': -5e7})
+check("smallcap_gate rejects unprofitable junk (the 'control your junk' screen)",
+      _junk['pass'] is False and any('junk' in r for r in _junk['reasons']))
+check("smallcap_gate: profitable via FCF alone still passes",
+      strat.smallcap_gate({**_good, 'profitMargins': None, 'freeCashflow': 5e7})['pass'] is True)
+check("smallcap_gate: price falls back to closes when info lacks a price",
+      strat.smallcap_gate({'marketCap': 1e9, 'averageVolume': 5e5, 'profitMargins': 0.1}, closes=[20.0])['pass'] is True)
+check("rank_smallcap applies a value+quality tilt (weights above equal-weight)",
+      strat.SMALLCAP_WEIGHTS['value'] > 1.0 and strat.SMALLCAP_WEIGHTS['quality'] > 1.0)
+_sc_ranked = strat.rank_smallcap(_stocks)
+check("rank_smallcap returns a composite ranking", _sc_ranked[0]['composite'] is not None and len(_sc_ranked) == 3)
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 sys.exit(1 if FAIL else 0)
