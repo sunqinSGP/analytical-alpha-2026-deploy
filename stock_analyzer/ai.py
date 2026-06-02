@@ -69,7 +69,7 @@ def stock_context(result):
         f"Momentum: {mom.get('rank_label')}. Risk: {rf.get('risk_level')} "
         f"(score {rf.get('risk_score')}/10, suggested max {rf.get('max_suggested_position')}% NAV).",
         f"Thesis-break stop: {result['risk_management']['mental_stop_loss']['thesis_break_threshold']}",
-        f"Primary 2026 theme: {thematic.get('primary_name')} (conviction {thematic.get('primary_conviction')}/10).",
+        f"Primary 2026 theme: {thematic.get('primary_name') or 'none (no strong fit)'} (conviction {thematic.get('primary_conviction')}/10).",
     ]
     risks = "; ".join(f"{r['factor']} ({r.get('severity')})" for r in rf.get('risks', [])[:5])
     if risks:

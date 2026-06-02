@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from stock_analyzer.alpha_engine import (
     alpha_analysis, dividend_yield_pct, format_market_cap,
     assess_conviction, assign_screen_tier, forward_rule_of_40,
-    net_revenue_retention_estimate, NoB_TYPES, resolve_ticker,
+    net_revenue_retention_estimate, NoB_TYPES, resolve_ticker, thematic_classification,
 )
 from stock_analyzer.verdict import build_factor_attribution, recommendation_for
 from stock_analyzer import portfolio as pf
@@ -459,6 +459,21 @@ _reg = strat.regime_gauge([{'signal': 'up'}, {'signal': 'up'}, {'signal': 'down'
 check("regime_gauge breadth + risk_on", abs(_reg['pct_up'] - 66.6667) < 0.1 and _reg['risk_on'] is True and _reg['n'] == 3)
 check("regime_gauge risk-off when majority down",
       strat.regime_gauge([{'signal': 'down'}, {'signal': 'down'}, {'signal': 'up'}])['risk_on'] is False)
+
+print("\n[17] Thematic classification (whole-word + no-fit guard)")
+_ma = thematic_classification('MA', {'longBusinessSummary': 'Mastercard generates revenue from payment processing services.',
+                                     'industry': 'Credit Services', 'sector': 'Financial Services'})
+check("thematic: 'gene' no longer matches inside 'generates'", _ma['all_scores']['healthcare_innovation'] == 0)
+check("thematic: weak/no fit -> primary_theme + name are None",
+      _ma['primary_theme'] is None and _ma['primary_name'] is None)
+_lly = thematic_classification('LLY', {'longBusinessSummary': 'Eli Lilly discovers pharmaceutical drug and gene therapy for diabetes.',
+                                       'industry': 'Drug Manufacturers', 'sector': 'Healthcare'})
+check("thematic: a real healthcare name still classifies",
+      _lly['primary_theme'] == 'healthcare_innovation' and _lly['primary_conviction'] >= 3)
+_jpm = thematic_classification('JPM', {'longBusinessSummary': 'A bank serving regional and community markets.',
+                                       'industry': 'Banks - Diversified', 'sector': 'Financial Services'})
+check("thematic: a 2-keyword coincidence stays below the fit threshold",
+      _jpm['all_scores']['smallcap_recovery'] == 2 and _jpm['primary_theme'] is None)
 
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 sys.exit(1 if FAIL else 0)

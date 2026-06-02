@@ -2166,6 +2166,15 @@ with tab_mk:
                     f'<div style="font-size:0.78rem; color:var(--muted); margin-top:6px;">Catalyst: {thematic.get("primary_catalyst", th["catalyst"])}</div>'
                     f'<div style="font-size:0.78rem; color:var(--muted);">Target P/E: {thematic.get("primary_pe_target", th["forward_pe_target"])}</div></div>',
                     unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="card" style="border-left:4px solid var(--line);">'
+                    '<div style="display:flex; align-items:baseline; gap:10px;">'
+                    '<b style="color:var(--ink);">No strong 2026-theme fit</b>'
+                    f'<span class="pill" style="margin-left:auto;">Top alignment {thematic.get("primary_conviction", 0)}/10</span></div>'
+                    '<div style="font-size:0.82rem; color:var(--slate); margin-top:6px;">This name doesn\'t map cleanly to any '
+                    'of the five 2026 themes (AI semis, energy, healthcare, AI software, small-cap value) — expected for sectors '
+                    'like payments, banks or staples. The per-theme alignment scores are below.</div></div>',
+                    unsafe_allow_html=True)
 
     all_scores = thematic.get('all_scores', {})
     if all_scores:

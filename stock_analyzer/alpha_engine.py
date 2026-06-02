@@ -1691,6 +1691,12 @@ THEMES_2026 = {
 }
 
 
+def _kw_hit(kw, *texts):
+    """Whole-word / phrase keyword match, so e.g. 'gene' does not match inside 'generated'."""
+    pat = r'\b' + re.escape(kw) + r'\b'
+    return any(re.search(pat, t) for t in texts if t)
+
+
 def thematic_classification(ticker, info):
     ticker = ticker.upper()
     desc = (info.get('longBusinessSummary') or '').lower()
@@ -1706,7 +1712,7 @@ def thematic_classification(ticker, info):
             score += 5
             matches.append('Top pick in 2026 framework')
         for kw in theme['keywords']:
-            if kw in desc or kw in industry or kw in name:
+            if _kw_hit(kw, desc, industry, name):
                 score += 1
                 matches.append(f"Keyword: {kw}")
         sector_map = {
@@ -1726,14 +1732,20 @@ def thematic_classification(ticker, info):
     ranked = sorted(theme_scores.items(), key=lambda x: x[1]['score'], reverse=True)
     primary_theme = ranked[0] if ranked else (None, None)
     secondary_themes = [t for t in ranked[1:3] if t[1]['score'] >= 2]
+    top_score = primary_theme[1]['score'] if primary_theme[1] else 0
+    # Only surface a theme when the alignment is real. Below MIN_FIT it's noise (e.g. a couple of
+    # generic keyword hits on a company that fits none of the five themes) -> report no strong fit.
+    # 3 needs a sector match + a keyword, or a framework top-pick (5) — not just two stray words.
+    MIN_FIT = 3
+    pk = primary_theme[0] if (primary_theme[0] in THEMES_2026 and top_score >= MIN_FIT) else None
 
     return {
         'all_scores': {k: v['score'] for k, v in theme_scores.items()},
-        'primary_theme': primary_theme[0] if primary_theme[0] else None,
-        'primary_name': THEMES_2026[primary_theme[0]]['name'] if primary_theme[0] in THEMES_2026 else None,
-        'primary_conviction': primary_theme[1]['score'] if primary_theme[1] else 0,
-        'primary_catalyst': THEMES_2026[primary_theme[0]]['catalyst'] if primary_theme[0] in THEMES_2026 else None,
-        'primary_pe_target': THEMES_2026[primary_theme[0]]['forward_pe_target'] if primary_theme[0] in THEMES_2026 else None,
+        'primary_theme': pk,
+        'primary_name': THEMES_2026[pk]['name'] if pk else None,
+        'primary_conviction': top_score,
+        'primary_catalyst': THEMES_2026[pk]['catalyst'] if pk else None,
+        'primary_pe_target': THEMES_2026[pk]['forward_pe_target'] if pk else None,
         'secondary_themes': [
             {'key': k, 'name': THEMES_2026[k]['name'], 'score': v['score']}
             for k, v in secondary_themes
