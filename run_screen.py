@@ -257,9 +257,8 @@ def _empty_smallcap_block():
             'weights': strat.SMALLCAP_WEIGHTS, 'params': strat.SMALLCAP_PARAMS}
 
 
-def _run_smallcap_subprocess():
-    """Spawn a fresh Python process for the small-cap pass (clean Yahoo crumb) and read back its block.
-    Falls back to an empty block if the child errors/times out — never aborts the nightly."""
+def _spawn_smallcap():
+    """Spawn a fresh Python process for the small-cap pass and read back its block (empty on error)."""
     import subprocess
     try:
         proc = subprocess.run([sys.executable, os.path.abspath(__file__), '--smallcap-only'],
@@ -270,8 +269,30 @@ def _run_smallcap_subprocess():
         with open(SC_BLOCK, encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
-        print(f"  small-cap subprocess failed ({e.__class__.__name__}); writing empty block", flush=True)
+        print(f"  small-cap subprocess failed ({e.__class__.__name__}); empty block", flush=True)
         return _empty_smallcap_block()
+
+
+def _is_rate_limited(block):
+    """True if the block looks like a total Yahoo rate-limit wipe-out (nothing fetched)."""
+    return block.get('n_passed', 0) == 0 and block.get('n_failed', 0) >= max(1, block.get('n_universe', 1))
+
+
+def _run_smallcap_subprocess(initial_cooldown=300, retry_cooldown=300):
+    """Run the small-cap pass in a fresh process. A clean crumb isn't enough on its own: Yahoo throttles
+    crumb ACQUISITION per-IP after the main run's ~330 fundamental fetches, so a child spawned at a 0s gap
+    still 401s. A cooldown lets that throttle lapse (a ~2min gap empirically clears it; we use more). Cools
+    down first, then spawns; if it still gets fully rate-limited, cools longer and retries once. Worst case
+    this just adds idle minutes to a background nightly — never aborts it."""
+    if initial_cooldown:
+        print(f"  cooling down {initial_cooldown}s so Yahoo's crumb endpoint un-throttles…", flush=True)
+        time.sleep(initial_cooldown)
+    block = _spawn_smallcap()
+    if _is_rate_limited(block) and retry_cooldown:
+        print(f"  small-cap still rate-limited; cooling {retry_cooldown}s and retrying once…", flush=True)
+        time.sleep(retry_cooldown)
+        block = _spawn_smallcap()
+    return block
 
 
 def main():
